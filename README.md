@@ -43,7 +43,7 @@ This repo is for quickly testing out new ideas in RL, with an emphasis on simpli
 
 ## ⚡️ Installation
 ```bash
-conda env create -f ./conda_env.yaml
+conda env create -f conda_env.yaml
 conda activate agency
 python -m pip install -e .
 ```
