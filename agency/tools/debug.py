@@ -2,7 +2,9 @@ import torch
 
 
 def print_tensor_stats(name, tt):
-    print(f"{name} [{torch.min(tt[:]):.4f},{tt.mean():.4f},{torch.max(tt[:]):.4f}], NANS: {torch.sum(torch.isnan(tt))}")
+    print(
+        f"{name} [{torch.min(tt[:]):.4f},{tt.mean():.4f},{torch.max(tt[:]):.4f}], NANS: {torch.sum(torch.isnan(tt))}"
+    )
 
 
 def debug_grads(named_parameters, N=5, lr=0.0001, show_pred=False):

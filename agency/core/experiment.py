@@ -1,4 +1,5 @@
 import argparse
+from dataclasses import dataclass
 import math
 import os
 from functools import partial
@@ -7,18 +8,23 @@ from typing import Any
 
 import numpy as np
 import torch
-from agency.core.logger import Logger, LogParams
-from agency.memory.episodic import EpisodicBuffer, EpisodicMemory
+from agency.core.logger import Logger
+from agency.memory import create_episodic_memory
+from agency.memory.episodic import EpisodicBuffer
+
+# from codetiming import Timer
 
 
 def print_header(title):
-    print("""
+    print(
+        """
         ___   _____________   __________  __
        /   | / ____/ ____/ | / / ____/\ \/ /
       / /| |/ / __/ __/ /  |/ / /      \  /
      / ___ / /_/ / /___/ /|  / /___    / /
     /_/  |_\____/_____/_/ |_/\____/   /_/
-    """)
+    """
+    )
     print(title)
 
 
@@ -45,28 +51,34 @@ def collect_initial_data(memory, min_steps=0, min_episodes=1, sleep_time=1.0):
         print(f"steps: {mem_steps}, episodes: {memory.num_complete_episodes()}")
 
 
+@dataclass
+class TrainLoopParams:
+    max_backprop_steps: int = math.inf
+
+
 def train_loop(
-        net,
-        simulator,
-        memory,
-        train_data,
-        logger,
-        episode_info_buffer,
-        episode_info_output_buffer,  # permament store for episode infos
-        create_batch_fn,
-        train_on_batch_fn,
-        max_train_steps,
-        hp,
+    net,
+    simulator,
+    memory,
+    train_data,
+    logger,
+    episode_info_buffer,
+    episode_info_output_buffer,  # permament store for episode infos
+    create_batch_fn,
+    train_on_batch_fn,
+    hp,
 ):
     cc = 0
     train_samples = 0
-    while simulator.get_agent_steps() < hp.max_agent_steps:
-        # with Timer(text="Mem samp: {:.4f}"):
-        rolls = memory.sample(batch_size=hp.batch_size, roll_length=hp.roll_length)
+    while simulator.get_agent_steps() < hp.data.max_agent_steps:
+        # with Timer(text="memory_sample: {:.4f}"):
+        rolls = memory.sample(batch_size=hp.backprop.batch_size, roll_length=hp.rl.roll_length)
 
-        # with Timer(text="Train: {:.4f}"):
+        # with Timer(text="create_batch: {:.4f}"):
         mini_batch = create_batch_fn(rolls, hp.device)
-        train_info = train_on_batch_fn(net, train_data, mini_batch)
+
+        # with Timer(text="train: {:.4f}"):
+        train_info = train_on_batch_fn(net, train_data, mini_batch, logger.should_log())
 
         train_samples += train_info.samples
 
@@ -80,36 +92,37 @@ def train_loop(
             update_steps=cc,
             train_samples=train_samples,
             episode_infos=episode_infos,
-            train_info=train_info
+            train_info=train_info,
         )
         cc += 1
-        if cc >= max_train_steps:
+
+        if cc >= hp.train.max_backprop_steps:
             print("TRAIN LOOP: Reached max train steps, exiting.")
             break
 
 
 def start_training(
-        *,
-        net,
-        simulator,
-        memory,
-        train_data,
-        logger,
-        episode_info_buffer,
-        create_batch_fn,
-        train_on_batch_fn,
-        hp,
-        max_train_steps=math.inf,
-        debug=False,
-        episode_info_output_buffer=None,  # permament store for episode infos
+    *,
+    net,
+    simulator,
+    memory,
+    train_data,
+    logger,
+    episode_info_buffer,
+    create_batch_fn,
+    train_on_batch_fn,
+    hp,
+    debug=False,
+    episode_info_output_buffer=None,  # permament store for episode infos
 ):
     if debug:
         from torch import autograd
+
         autograd.set_detect_anomaly(True)
 
     print("COLLECT INITIAL DATA")
     simulator.start()
-    collect_initial_data(memory, min_steps=hp.init_steps, min_episodes=1)
+    collect_initial_data(memory, min_steps=hp.data.init_agent_steps, min_episodes=hp.data.init_episodes)
 
     logger.start_timers()
     logger.log_hyper_params(hp)
@@ -125,8 +138,7 @@ def start_training(
         episode_info_output_buffer,
         create_batch_fn,
         train_on_batch_fn,
-        max_train_steps,
-        hp
+        hp,
     )
 
     print("END TRAINING")
@@ -143,7 +155,8 @@ def start_experiment(
     create_inferer_fn,
     create_batch_fn,
     train_on_batch_fn,
-    create_simulator_fn
+    create_simulator_fn,
+    create_memory_fn,
 ):
     print_header(exp_name)
     print(hp.device)
@@ -156,12 +169,12 @@ def start_experiment(
         num_actions=wp.num_actions,
     ).to(hp.device)
 
-    memory = EpisodicMemory(max_size=hp.max_memory_size, min_episode_length=hp.roll_length)
+    memory = create_memory_fn(hp, wp)
+
     episode_info_buffer = EpisodicBuffer()
     episode_info_output_buffer = EpisodicBuffer()
 
-    train_data_container = train_data_creator_fn(net=net, hp=hp, wp=wp, categorical=hp.dist.categorical)
-    # print("TARGET ENTROPY = ", train_data_container.target_entropy)
+    train_data_container = train_data_creator_fn(net=net, hp=hp, wp=wp)
 
     start_training(
         net=net,
@@ -177,7 +190,7 @@ def start_experiment(
             experiment_path=get_unique_exp_path(hp.log.log_dir, exp_name),
             agent_steps_per_log=hp.log.agent_steps_per_log,
             train_samples_per_log=hp.log.train_samples_per_log,
-            log_on=hp.log.log_on
+            log_on=hp.log.log_on,
         ),
         episode_info_buffer=episode_info_buffer,
         create_batch_fn=create_batch_fn,
@@ -189,14 +202,14 @@ def start_experiment(
 
 
 def launch_experiment_sweeps(
-        param_sweep: bool,
-        num_experiments: int,
-        base_name: str,  # The base name for the experiment
-        hp: Any,  # Hyper Parameters
-        wp: Any,  # World Parameters
-        start_experiment_fn: Any,
-        torch_seed: int = None,
-        np_seed: int = None,
+    param_sweep: bool,
+    num_experiments: int,
+    base_name: str,  # The base name for the experiment
+    hp: Any,  # Hyper Parameters
+    wp: Any,  # World Parameters
+    start_experiment_fn: Any,
+    torch_seed: int = None,
+    np_seed: int = None,
 ):
     torch.set_num_threads(torch.get_num_threads())
     if torch_seed is not None:
@@ -220,14 +233,17 @@ def start_experiment_helper(
     create_inferer_fn,
     create_batch_fn,
     train_on_batch_fn,
-    create_simulator_fn
+    create_simulator_fn,
+    create_memory_fn=create_episodic_memory,
 ):
     torch.set_printoptions(precision=8)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--sweep', action='store_true', help="Run a parameter sweep.")
-    parser.add_argument('--n', type=int, default=1, help="The number of sequential experiments to run.")
+    parser.add_argument("--sweep", action="store_true", help="Run a parameter sweep.")
+    parser.add_argument("--n", type=int, default=1, help="The number of sequential experiments to run.")
+    parser.add_argument("--max_backprops", type=int, default=hp.train.max_backprop_steps)
     args = parser.parse_args()
+    hp.train.max_backprop_steps = args.max_backprops
 
     launch_experiment_sweeps(
         args.sweep,
@@ -242,6 +258,7 @@ def start_experiment_helper(
             create_inferer_fn=create_inferer_fn,
             create_batch_fn=create_batch_fn,
             train_on_batch_fn=train_on_batch_fn,
-            create_simulator_fn=create_simulator_fn
-        )
+            create_simulator_fn=create_simulator_fn,
+            create_memory_fn=create_memory_fn,
+        ),
     )

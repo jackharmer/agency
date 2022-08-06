@@ -1,0 +1,18 @@
+name: agency
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pytorch=1.12.0
+  - torchvision=0.13.0
+  - cudatoolkit=11.3
+  - pip
+  - pip:
+    - "git+https://github.com/jackharmer/gym-minigrid.git"
+    - gym[atari,Box2D,other,accept-rom-license]==0.24.0
+    - pytest
+    - mlagents_envs==0.28.0
+    - tensorboard
+    - atari_py
+    - envpool

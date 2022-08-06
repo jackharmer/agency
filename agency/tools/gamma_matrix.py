@@ -24,11 +24,12 @@ def make_gamma_matrix(gamma, roll_length):
     for cc in range(roll_length + 1):
         gamma_vector[cc] = pow(gamma, cc)
     for cc in range(roll_length):
-        gamma_matrix[cc:(roll_length + 1), cc] = gamma_vector[0:roll_length + 1 - cc]
+        gamma_matrix[cc : (roll_length + 1), cc] = gamma_vector[0 : roll_length + 1 - cc]
     return gamma_matrix
 
 
-# Calculate the discounted return using a gamma matrix, see above.
+# Calculate the discounted n step return using a gamma matrix, i.e. without for loops (see above).
+# This version masks at every step and thus can deal with rollouts over episode boundaries :)
 #
 #  Reward Matrix         *     Gamma Matrix                 = Discount Matrix
 #  [num_rolls, roll_length+1] [roll_length+1, roll_length]   [num_rolls, roll_length]
@@ -36,10 +37,34 @@ def make_gamma_matrix(gamma, roll_length):
 #  [ r0, r1, ..., v]           [0.99^0, 0.0   ]
 #  [ r0, r1, ..., v]     *     [0.99^1, 0.99^0]
 #  [ r0, r1, ..., v]           [0.99^2, 0.99^1]
-def discount(rewards, values, gamma_matrix):
+# @torch.jit.script
+def discount(
+    rewards: torch.Tensor,  # [num_rolls, roll_length]
+    values: torch.Tensor,  # [num_rolls, 1]
+    gamma_matrix: torch.Tensor,  # [roll_length + 1, roll_length]
+    masks: torch.Tensor,  # [num_rolls, roll_length]
+):
+    num_rolls = rewards.shape[0]
+    roll_length = rewards.shape[1]
+
     # [num_rolls, roll_length + 1]
     reward_matrix = torch.cat([rewards, values], dim=1)
+
+    # [num_rolls, roll_length + 1]
+    mask_matrix = torch.cat([torch.ones((num_rolls, 1), device=rewards.device), masks], dim=1)
+    # mask the gamma matrix by the terminal states, flooding the state masking to the end of each rollout
+    # when calculating for each state.
+    mask_matrix_rep = mask_matrix.unsqueeze(2).tile(1, 1, roll_length)
+    mask_matrix_tril = 1.0 - torch.cumsum(torch.tril(1 - mask_matrix_rep, -1), 1).clamp(max=1.0)
+    masked_gamma_matrix = torch.mul(mask_matrix_tril, gamma_matrix)
+
     # [num_rolls, roll_length]
-    discount_matrix = torch.matmul(reward_matrix, gamma_matrix)  # dot product
+    discount_matrix = torch.bmm(
+        torch.transpose(masked_gamma_matrix, 1, 2),
+        reward_matrix.unsqueeze(2),
+    ).view(num_rolls, roll_length)
+
     # Discount vector: [num_rolls * roll_length]
-    return torch.reshape(discount_matrix, (discount_matrix.shape[0] * discount_matrix.shape[1], 1))
+    out = torch.reshape(discount_matrix, (discount_matrix.shape[0] * discount_matrix.shape[1], 1))
+
+    return out

@@ -1,29 +1,34 @@
 import time
 from typing import Any
 
-from agency.worlds.gym_env import (GymThread, GymVecEnvThread,
-                                   gym_create_env_helper)
+from agency.worlds.gym_env import (
+    GymThread,
+    GymVecEnvThread,
+    gym_create_envpool_vecenv,
+    gym_create_single_env,
+    gym_create_async_vecenv,
+)
 from agency.worlds.unity_env import UnityThread
 
 
-class Simulator:
+class AsyncSimulator:
     def __init__(
-            self,
-            inferer: Any,
-            num_workers: int,
-            world_params: Any,
-            memory: Any,
-            episode_info_buffer: Any,
-            thread_class: Any,
-            make_env_fn: Any
+        self,
+        inferer: Any,
+        num_worker_threads: int,
+        world_params: Any,
+        memory: Any,
+        episode_info_buffer: Any,
+        thread_class: Any,
+        make_env_fn: Any,
     ):
         self._inferer = inferer
-        self._num_workers = num_workers
+        self._num_workers_threads = num_worker_threads
         self._params = world_params
         self._memory = memory
         self._episode_info_buffer = episode_info_buffer
         self._world_threads = []
-        for thread_counter in range(self._num_workers):
+        for thread_counter in range(self._num_workers_threads):
             self._world_threads.append(
                 thread_class(
                     thread_id=thread_counter,
@@ -31,7 +36,7 @@ class Simulator:
                     memory=self._memory,
                     params=self._params,
                     episode_info_buffer=self._episode_info_buffer,
-                    make_env_fn=make_env_fn
+                    make_env_fn=make_env_fn,
                 )
             )
 
@@ -69,51 +74,46 @@ class Simulator:
     def get_agent_steps(self):
         return self._memory.total_agent_steps()
 
+    def is_synchronous(self):
+        return False
+
 
 def create_gym_simulator(
-        inferer,
-        world_params,
-        memory,
-        episode_info_buffer,
-        make_env_fn=gym_create_env_helper
+    inferer,
+    world_params,
+    memory,
+    episode_info_buffer,
 ):
     if world_params.use_vecenv:
-        simulator = Simulator(
-            inferer=inferer,
-            num_workers=1,  # We only need one worker here, since VECENV launches the seperate workers.
-            world_params=world_params,
-            memory=memory,
-            episode_info_buffer=episode_info_buffer,
-            thread_class=GymVecEnvThread,
-            make_env_fn=make_env_fn
-        )
+        num_worker_threads = 1  # vecenvs launch the seperate world instances.
+        make_env_fn = gym_create_envpool_vecenv if world_params.use_envpool else gym_create_async_vecenv
+        thread_class = GymVecEnvThread
     else:
-        simulator = Simulator(
-            inferer=inferer,
-            num_workers=world_params.num_workers,
-            world_params=world_params,
-            memory=memory,
-            episode_info_buffer=episode_info_buffer,
-            thread_class=GymThread,
-            make_env_fn=make_env_fn
-        )
+        num_worker_threads = world_params.num_workers
+        make_env_fn = gym_create_single_env
+        thread_class = GymThread
+
+    simulator = AsyncSimulator(
+        inferer=inferer,
+        num_worker_threads=num_worker_threads,
+        world_params=world_params,
+        memory=memory,
+        episode_info_buffer=episode_info_buffer,
+        thread_class=thread_class,
+        make_env_fn=make_env_fn,
+    )
+
     return simulator
 
 
-def create_unity_simulator(
-        inferer,
-        world_params,
-        memory,
-        episode_info_buffer,
-        **kwargs
-):
-    simulator = Simulator(
+def create_unity_simulator(inferer, world_params, memory, episode_info_buffer, **kwargs):
+    simulator = AsyncSimulator(
         inferer=inferer,
-        num_workers=world_params.num_workers,
+        num_worker_threads=world_params.num_workers,
         world_params=world_params,
         memory=memory,
         episode_info_buffer=episode_info_buffer,
         thread_class=UnityThread,
-        make_env_fn=None
+        make_env_fn=None,
     )
     return simulator

@@ -27,21 +27,30 @@ This repo is for quickly testing out new ideas in RL, with an emphasis on simpli
 
 ## ⭐️ Features
 ### Algorithms:
-* SAC (N-Step)
-* AWAC (N-Step)
+* SAC (N-step)
+* AWAC (N-step)
+* PPO (N-step)
 ### Distributions:
-* Continuous
-* Categorical
-* Gumbel
+|      | Continuous | Categorical | Gumbel |
+|:-----|------------|-------------|--------|
+| SAC  | X | X | X |
+| AWAC | X | - | X |
+| PPO  | X | X | X |
 ### Architectures:
-* MLP
-* Convolutional
+|      | MLP | Convolutional |
+|:-----|-----|---------------|
+| SAC  | X | X |
+| AWAC | X | X |
+| PPO  | X | X |
 ### Environments:
 * Gym
 * Unity mlagents
+### N-step Discounting (without for loops!)
+* Implemented using matrix multiplications, without the need for for loops, to significantly improve performance.
+(see core/tools/gamma_matrix.py)
 
 
-## ⚡️ Installation
+## ⚙️ Installation
 ```bash
 conda env create -f conda_env.yaml
 conda activate agency
@@ -51,18 +60,30 @@ python -m pip install -e .
 Launch the tests:
 
 ```bash
-python -m pytest tests/short
+python -m pytest tests/functional
 ```
 
-Longer test can be found in tests/medium.
+Launch the training tests (tuned on a system with a 6 core CPU and Nvidia 1080 GPU):
+```bash
+python -m pytest tests/training
+```
 
+## 🌀 Try some examples:
+#### Train Lunar Lander in 1 min!:
+```bash
+python examples/gym/train_sac_mlp_continuous_lunarlander.py
+```
+#### Train Pong in 2 mins!:
+```bash
+python examples/gym/train_sac_vision_categorical_pong.py
+```
 
-## 📖 Getting started
+## 📖 Learn the framework.
 The best place to start is to take a look in examples/tutorials.
 
 train_sac_with_helper.py demonstrates how to setup a basic MLP network and use it train lunar lander using Soft Actor Critic.
 
-It can be launched using the following command (Training takes around 10-15 mins on a consumer GPU (1080)):
+It can be launched using the following command (Training takes around 1 minute on a Nvidia 1080 GPU):
 
 ```bash
 python examples/tutorials/train_sac_with_helper.py
@@ -77,24 +98,6 @@ See train_sac_mlp_continuous_lunarlander.py for an example of how to randomize h
 ```bash
 python examples/gym/train_sac_mlp_continuous_lunarlander.py --sweep --n 10
 ```
-
-
-## ⚙️ Training Status
-| Algo. |Arch.  | Action space| Example envs that train        |
-|:------|-------|-------------|-------------------------------|
-| SAC   | MLP   | Categorical | CartPole, Identity            |
-| SAC   | MLP   | Gumbel      | Identity                      |
-| SAC   | MLP   | Continuous  | LunarLander, 3dBall, Identity |
-| SAC   | Conv. | Continuous  | CarRacing                     |
-| SAC   | Conv. | Gumbel      | GridWorld, basic              |
-| SAC   | Conv. | Categorical | Minigrid, Pong                |
-| AWAC  | MLP   | Categorical |  --Not supported--            |
-| AWAC  | MLP   | Gumbel      | Identity                     |
-| AWAC  | MLP   | Continuous  | LunarLander, 3dBall         |
-| AWAC  | Conv. | Continuous  | -                           |
-| AWAC  | Conv. | Gumbel      | Pong                        |
-| AWAC  | Conv. | Categorical | --Not supported--           |
-
 
 
 ## 🔔 Tips and Tricks
@@ -125,9 +128,6 @@ python -m pytest -s tests/medium
 ```
 
 ## ❤️ Areas in need of some love:
-* Gym env data collection
-    * Improve performance.
-    * Add vec env rendering.
 * Unity env data collection.
     * add support for action branching.
     * add support for multiple brains.
