@@ -20,13 +20,14 @@ def custom_ortho_init_(input_weights, gain=1.0):
     u, _, v = np.linalg.svd(gaussian_noise, full_matrices=False)
     weights = u if u.shape == flat_shape else v  # pick the one with the correct shape
     weights = weights.reshape(shape)
-    weights = (gain * weights[:shape[0], :shape[1]]).astype(np.float32)
+    weights = (gain * weights[: shape[0], : shape[1]]).astype(np.float32)
     input_weights = weights
 
 
 def mlp(
     input_size,
     layer_sizes,
+    activation_layer=nn.ReLU,
 ):
     layer_sizes = [input_size] + layer_sizes
 
@@ -36,7 +37,7 @@ def mlp(
         custom_ortho_init_(linear.weight, gain=math.sqrt(2.0))
         nn.init.constant_(linear.bias, 0.0)
         layers.append(linear)
-        layers.append(nn.ReLU())
+        layers.append(activation_layer())
 
     return nn.Sequential(*layers)
 
@@ -46,7 +47,8 @@ def conv_encoder(
     layer_channels,
     layer_kernels_sizes,
     layer_strides,
-    flatten=False
+    flatten=False,
+    activation_layer=nn.ReLU,
 ):
     num_layers = len(layer_channels)
 
@@ -59,13 +61,13 @@ def conv_encoder(
             out_channels=layer_channels_full[cc + 1],
             kernel_size=layer_kernels_sizes[cc],
             stride=layer_strides[cc],
-            padding=0
+            padding=0,
         )
         custom_ortho_init_(conv.weight, gain=math.sqrt(2.0))
         nn.init.constant_(conv.bias, 0.0)
 
         layers.append(conv)
-        layers.append(nn.ReLU())
+        layers.append(activation_layer())
 
     if flatten:
         layers.append(torch.nn.Flatten())
@@ -82,3 +84,36 @@ class GradientBlocker(nn.Module):
         with torch.no_grad():
             x = self._layer(state)
         return x
+
+
+class InputNormalizer(torch.nn.Module):
+    def __init__(self, obs_shape, device="cuda"):
+        super().__init__()
+        self.register_buffer("count", torch.ones((), dtype=torch.float64, device=device))
+        self.register_buffer("running_mean", torch.zeros(obs_shape, dtype=torch.float64, device=device))
+        self.register_buffer("running_var", torch.ones(obs_shape, dtype=torch.float64, device=device))
+
+    @torch.jit.export
+    def update_normalization(self, obs):
+        batch_size = obs.shape[0]
+        total_count = self.count + batch_size
+
+        mean_diff = obs.mean([0]) - self.running_mean
+        weighted_mean_diff_sq = mean_diff**2 * self.count * batch_size / total_count / total_count
+        weighted_running_var = self.running_var * self.count / total_count
+        weighted_obs_var = obs.var([0]) * batch_size / total_count
+
+        self.running_mean = self.running_mean + mean_diff * batch_size / total_count
+        self.running_var = weighted_running_var + weighted_obs_var + weighted_mean_diff_sq
+        self.running_count = total_count
+
+    @torch.jit.export
+    def normalize(self, obs):
+        if self.training:
+            self.update_normalization(obs)
+        std = torch.sqrt(self.running_var.float() + 1e-5)
+        return (obs - self.running_mean.float()) / std
+
+    @torch.jit.export
+    def forward(self, obs):
+        return self.normalize(obs)

@@ -2,19 +2,22 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-from agency.algo.sac.network import (ContinuousDistParams, DiscreteDistParams,
-                                     MlpNetworkArchitecture,
-                                     VisionNetworkArchitecture)
-from agency.layers.distributions import DiscretePolicy, GaussianPolicy
-from agency.layers.feed_forward import (mlp, conv_encoder, GradientBlocker)
+from agency.algo.sac.network import MlpNetworkArchitecture, VisionNetworkArchitecture
+from agency.layers.distributions import (
+    DiscretePolicy,
+    GaussianPolicy,
+    ContinuousDistParams,
+    DiscreteDistParams,
+)
+from agency.layers.feed_forward import mlp, conv_encoder, GradientBlocker
 from agency.layers.policy_heads import PolicyHead
-from agency.layers.value_heads import (QEncoder, QHead,
-                                       QVisionEncoder, soft_update)
+from agency.layers.value_heads import QEncoder, QHead, QVisionEncoder, soft_update
 from agency.tools.helpers import calculate_conv_output_size
 
 
 @dataclass
 class AwacParams:
+    learning_rate: float = 0.002
     beta: float = 0.2
     adv_clip: float = 2.0
     use_softmax: bool = False
@@ -48,11 +51,11 @@ class AwacData:
 
 
 def create_continuous_network(
-        input_size: int,
-        arch: MlpNetworkArchitecture,
-        dist: ContinuousDistParams,
-        algo: AwacParams,
-        num_actions: int,
+    input_size: int,
+    arch: MlpNetworkArchitecture,
+    dist: ContinuousDistParams,
+    algo: AwacParams,
+    num_actions: int,
 ):
     q_input_size = input_size + num_actions
 
@@ -71,16 +74,16 @@ def create_continuous_network(
         q1_target=QHead(QEncoder(q1_target_encoder), input_size=arch.q_hidden_sizes[-1], output_size=1),
         q2_target=QHead(QEncoder(q2_target_encoder), input_size=arch.q_hidden_sizes[-1], output_size=1),
         policy=policy,
-        policy_params=list(policy.parameters())
+        policy_params=list(policy.parameters()),
     )
 
 
 def create_discrete_network(
-        input_size: int,
-        arch: MlpNetworkArchitecture,
-        dist: DiscreteDistParams,
-        algo: AwacParams,
-        num_actions: int,
+    input_size: int,
+    arch: MlpNetworkArchitecture,
+    dist: DiscreteDistParams,
+    algo: AwacParams,
+    num_actions: int,
 ):
     q_input_size = input_size + num_actions
 
@@ -99,22 +102,22 @@ def create_discrete_network(
         q1_target=QHead(QEncoder(q1_target_encoder), input_size=arch.q_hidden_sizes[-1], output_size=1),
         q2_target=QHead(QEncoder(q2_target_encoder), input_size=arch.q_hidden_sizes[-1], output_size=1),
         policy=policy,
-        policy_params=list(policy.parameters())
+        policy_params=list(policy.parameters()),
     )
 
 
 def create_discrete_vision_network(
-        input_size: list[int],
-        arch: VisionNetworkArchitecture,
-        dist: DiscreteDistParams,
-        algo: AwacParams,
-        num_actions: int,
+    input_size: list[int],
+    arch: VisionNetworkArchitecture,
+    dist: DiscreteDistParams,
+    algo: AwacParams,
+    num_actions: int,
 ):
     shared_enc_output_size = calculate_conv_output_size(
-        input_size[0:2],
+        input_size[1:3],
         arch.shared_enc_channels[-1],
         arch.shared_enc_kernel_sizes,
-        arch.shared_enc_strides
+        arch.shared_enc_strides,
     )
     q_input_size = shared_enc_output_size + num_actions
     q_output_size = 1
@@ -122,12 +125,12 @@ def create_discrete_vision_network(
     def make_conv_encoder():
         return torch.nn.Sequential(
             conv_encoder(
-                input_channels=input_size[2],
+                input_channels=input_size[0],
                 layer_channels=arch.shared_enc_channels,
                 layer_kernels_sizes=arch.shared_enc_kernel_sizes,
                 layer_strides=arch.shared_enc_strides,
             ),
-            torch.nn.Flatten()
+            torch.nn.Flatten(),
         )
 
     def make_q_encoder(_shared_encoder):
@@ -136,7 +139,7 @@ def create_discrete_vision_network(
             mlp(
                 input_size=q_input_size,
                 layer_sizes=arch.q_hidden_sizes,
-            )
+            ),
         )
 
     if arch.use_shared_encoder:
@@ -149,7 +152,7 @@ def create_discrete_vision_network(
 
         policy_encoder = torch.nn.Sequential(
             GradientBlocker(shared_encoder),
-            policy_body
+            policy_body,
         )
 
         q1_encoder = make_q_encoder(shared_encoder)
@@ -164,7 +167,7 @@ def create_discrete_vision_network(
             mlp(
                 input_size=shared_enc_output_size,
                 layer_sizes=arch.p_hidden_sizes,
-            )
+            ),
         )
         q1_encoder = make_q_encoder(make_conv_encoder())
         q2_encoder = make_q_encoder(make_conv_encoder())
@@ -186,23 +189,23 @@ def create_discrete_vision_network(
         q1_target=QHead(q1_target_encoder, input_size=arch.q_hidden_sizes[-1], output_size=q_output_size),
         q2_target=QHead(q2_target_encoder, input_size=arch.q_hidden_sizes[-1], output_size=q_output_size),
         policy=policy,
-        policy_params=policy_params
+        policy_params=policy_params,
     )
     return net
 
 
 def create_vision_network(
-        input_size: list[int],
-        arch: VisionNetworkArchitecture,
-        dist: ContinuousDistParams,
-        algo: AwacParams,
-        num_actions: int,
+    input_size: list[int],
+    arch: VisionNetworkArchitecture,
+    dist: ContinuousDistParams,
+    algo: AwacParams,
+    num_actions: int,
 ):
     shared_enc_output_size = calculate_conv_output_size(
-        input_size[0:2],
+        input_size[1:3],
         arch.shared_enc_channels[-1],
         arch.shared_enc_kernel_sizes,
-        arch.shared_enc_strides
+        arch.shared_enc_strides,
     )
     q_input_size = shared_enc_output_size + num_actions
     q_output_size = 1
@@ -210,12 +213,12 @@ def create_vision_network(
     def make_conv_encoder():
         return torch.nn.Sequential(
             conv_encoder(
-                input_channels=input_size[2],
+                input_channels=input_size[0],
                 layer_channels=arch.shared_enc_channels,
                 layer_kernels_sizes=arch.shared_enc_kernel_sizes,
                 layer_strides=arch.shared_enc_strides,
             ),
-            torch.nn.Flatten()
+            torch.nn.Flatten(),
         )
 
     def make_q_encoder(_shared_encoder):
@@ -224,7 +227,7 @@ def create_vision_network(
             mlp(
                 input_size=q_input_size,
                 layer_sizes=arch.q_hidden_sizes,
-            )
+            ),
         )
 
     if arch.use_shared_encoder:
@@ -237,7 +240,7 @@ def create_vision_network(
 
         policy_encoder = torch.nn.Sequential(
             GradientBlocker(shared_encoder),
-            policy_body
+            policy_body,
         )
 
         q1_encoder = make_q_encoder(shared_encoder)
@@ -252,7 +255,7 @@ def create_vision_network(
             mlp(
                 input_size=shared_enc_output_size,
                 layer_sizes=arch.p_hidden_sizes,
-            )
+            ),
         )
         q1_encoder = make_q_encoder(make_conv_encoder())
         q2_encoder = make_q_encoder(make_conv_encoder())
@@ -273,6 +276,6 @@ def create_vision_network(
         q1_target=QHead(q1_target_encoder, input_size=arch.q_hidden_sizes[-1], output_size=q_output_size),
         q2_target=QHead(q2_target_encoder, input_size=arch.q_hidden_sizes[-1], output_size=q_output_size),
         policy=policy,
-        policy_params=policy_params
+        policy_params=policy_params,
     )
     return net

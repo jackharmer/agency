@@ -45,7 +45,7 @@ def clip_grad_norm_(parameters, max_norm, norm_type=2, clip=True):
         for p in parameters:
             param_norm = p.grad.data.norm(norm_type)
             total_norm += param_norm.item() ** norm_type
-        total_norm = total_norm ** (1. / norm_type)
+        total_norm = total_norm ** (1.0 / norm_type)
         total_norm = torch.tensor(total_norm)
     clip_coef = max_norm / (total_norm + 1e-6)
     if clip:

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 from enum import Enum
 from agency.tools.timer import TimeDelta
+import torch
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -26,13 +27,22 @@ class LogParams:
     log_on: LogOn = LogOn.TRAIN_SAMPLES
 
 
+def extract_images_to_log(obs: torch.tensor, N: int = 3):
+    assert len(obs.shape) == 4
+    if obs.shape[1] == 3:
+        I = obs[0:N, 0:3, :, :]  # This will appear as RGB
+    else:
+        I = obs[0:N, :, :, :].mean(1, keepdim=True).expand(-1, 3, -1, -1)
+    return I
+
+
 class Logger:
     def __init__(
-            self,
-            experiment_path: str,
-            agent_steps_per_log: str,
-            train_samples_per_log: str,
-            log_on: LogOn = LogOn.TRAIN_SAMPLES,
+        self,
+        experiment_path: str,
+        agent_steps_per_log: str,
+        train_samples_per_log: str,
+        log_on: LogOn = LogOn.TRAIN_SAMPLES,
     ):
         self._log_on = log_on
         self._agent_steps_per_log = agent_steps_per_log
@@ -58,19 +68,22 @@ class Logger:
         self._writer.add_graph(model, input_to_model=inputs)
 
     def update(
-            self,
-            agent_steps,
-            update_steps,
-            train_samples,
-            episode_infos,
-            train_info,
+        self,
+        agent_steps,
+        update_steps,
+        train_samples,
+        episode_infos,
+        train_info,
     ):
+        # check this prior to updating agent_steps/train_samples.
+        ready_for_log = self.should_log()
+
         self._agent_steps = agent_steps
         self._update_steps = update_steps
         self._train_samples = train_samples
         self._episode_infos_buffer.extend(episode_infos)
 
-        if self._should_log():
+        if ready_for_log:
             delta_time = self._time_delta.get_delta_in_seconds()
             self._agent_sps = float(agent_steps - self._last_log_agent_steps) / delta_time
             self._train_sps = float(train_samples - self._last_log_train_samples) / delta_time
@@ -99,22 +112,28 @@ class Logger:
             # self._writer.add_histogram('rewards/reward', np.asarray(self._episode_infos_buffer[0].rewards), agent_steps)
             self._episode_infos_buffer = []
 
-            self._writer.add_scalar('rewards/reward', mean_reward, agent_steps)
-            self._writer.add_scalar('rewards/reward_vs_ep', mean_reward, self._num_episodes)
-            self._writer.add_scalar('environment/episode_length', mean_episode_length, agent_steps)
+            self._writer.add_scalar("rewards/reward", mean_reward, agent_steps)
+            self._writer.add_scalar("rewards/reward_vs_ep", mean_reward, self._num_episodes)
+            self._writer.add_scalar("environment/episode_length", mean_episode_length, agent_steps)
             reward_string = f"R: {mean_reward:.1f}"
             ep_len_string = f"EL: {mean_episode_length:.1f}"
         else:
             reward_string = "R: --.--"
             ep_len_string = "EL: --"
 
-        print(time_string + ", " + reward_string + ", " + ep_len_string +
-              f", SAMP: {self._train_samples}, STEPS: {self._agent_steps}" +
-              f", SPS: {self._agent_sps:.1f}, BPS: {self._train_sps:.1f}")
-        self._writer.add_scalar('training_stats/train_samples', train_samples, agent_steps)
+        print(
+            time_string
+            + ", "
+            + reward_string
+            + ", "
+            + ep_len_string
+            + f", SAMP: {self._train_samples}, STEPS: {self._agent_steps}"
+            + f", SPS: {self._agent_sps:.1f}, BPS: {self._train_sps:.1f}"
+        )
+        self._writer.add_scalar("training_stats/train_samples", train_samples, agent_steps)
 
-        self._writer.add_scalar('performance/agent_steps_per_second', self._agent_sps, agent_steps)
-        self._writer.add_scalar('performance/samples_per_second', self._train_sps, agent_steps)
+        self._writer.add_scalar("performance/agent_steps_per_second", self._agent_sps, agent_steps)
+        self._writer.add_scalar("performance/samples_per_second", self._train_sps, agent_steps)
 
         for k, v in train_info.scalar_logs_dict.items():
             self._writer.add_scalar(k, v, agent_steps)
@@ -125,7 +144,7 @@ class Logger:
         for k, v in train_info.image_logs_dict.items():
             self._writer.add_images(k, v, agent_steps)
 
-    def _should_log(self) -> bool:
+    def should_log(self) -> bool:
         if self._log_on == LogOn.TRAIN_SAMPLES:
             return (self._train_samples - self._last_log_train_samples) > self._train_samples_per_log
         else:

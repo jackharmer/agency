@@ -24,4 +24,3 @@ class TimeDelta:
 
     def get_total_time_as_string(self):
         return time.strftime("%H:%M:%S", time.gmtime(time.time() - self._start_time))
-

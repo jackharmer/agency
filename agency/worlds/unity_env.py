@@ -5,11 +5,10 @@ from typing import Any
 
 import numpy as np
 import torch
-from agency.memory.episodic import Step
+from agency.memory.block_memory import AgentStep
 from mlagents_envs.environment import UnityEnvironment
 from mlagents_envs.registry import default_registry
-from mlagents_envs.side_channel.engine_configuration_channel import \
-    EngineConfigurationChannel
+from mlagents_envs.side_channel.engine_configuration_channel import EngineConfigurationChannel
 from mlagents_envs.base_env import ActionTuple
 
 
@@ -19,10 +18,23 @@ class EpisodeInfo:
     steps: int
 
 
+@dataclass
+class UnityWorldParams:
+    name: str
+    input_size: int
+    num_actions: int
+    render: bool = False
+    is_image: bool = False
+    num_workers: int = 1
+    random_actions: bool = False
+    use_registry: bool = True
+
+
 class AgentData:
     def __init__(self):
         self.last_obs = None
         self.last_policy = None
+        self.last_aux_data = None
         self.total_reward = 0
         self.step_count = 0
 
@@ -36,13 +48,13 @@ class UnityThread(threading.Thread):
     """
 
     def __init__(
-            self,
-            thread_id: int,
-            inferer: Any,
-            memory: Any,
-            params: Any,
-            episode_info_buffer: Any,
-            make_env_fn: Any = None  # API requirement, currently unused here.
+        self,
+        thread_id: int,
+        inferer: Any,
+        memory: Any,
+        params: Any,
+        episode_info_buffer: Any,
+        make_env_fn: Any = None,  # API requirement, currently unused here.
     ):
         super().__init__()
         self._thread_id = thread_id
@@ -64,7 +76,7 @@ class UnityThread(threading.Thread):
         return self._has_stopped
 
     def get_memory_id(self, local_agent_id):
-        return (self._thread_id << 12) + local_agent_id
+        return [(self._thread_id << 12) + local_agent_id]
 
     def run(self):
         print(f"Worker {self._thread_id}: Making unity env.")
@@ -115,6 +127,7 @@ class UnityThread(threading.Thread):
             obs = agent.obs[0]
             if self._params.is_image and permute:
                 obs = np.swapaxes(obs, 0, 2)
+            obs = torch.from_numpy(obs).float()
             return obs
 
         while (step_count < self._num_steps) and not self._should_stop:
@@ -128,19 +141,24 @@ class UnityThread(threading.Thread):
 
                 obs = get_obs0(agent)
 
-                final_step = Step(
-                    obs=agent_data.last_obs.copy(),
-                    policy=agent_data.last_policy.copy(),
-                    reward=agent.reward,
-                    done=not agent.interrupted,
-                    obs_next=obs
+                final_step = AgentStep(
+                    obs=agent_data.last_obs.unsqueeze(0),  # .copy(),
+                    obs_next=obs.unsqueeze(0),
+                    reward=torch.tensor(agent.reward).unsqueeze(0),
+                    policy=[agent_data.last_policy],  # .copy(),
+                    done=torch.tensor(not agent.interrupted).unsqueeze(0),
+                    aux_data=[agent_data.last_aux_data],
+                    agent_id=self.get_memory_id(agent_id),
                 )
-                self._memory.append(step=final_step, agent_id=self.get_memory_id(agent_id))
+                self._memory.append(step=final_step)
 
                 final_reward = agent_data.total_reward + agent.reward
                 step_count = agent_data.step_count
                 self._episode_info_buffer.append(
-                    EpisodeInfo(reward=final_reward, steps=step_count)
+                    EpisodeInfo(
+                        reward=final_reward,
+                        steps=step_count,
+                    )
                 )
                 agent_data_dict.pop(agent_id)
 
@@ -153,15 +171,17 @@ class UnityThread(threading.Thread):
 
                 obs = get_obs0(agent)
                 if agent_data.has_previous_obs():
-                    step = Step(
-                        obs=agent_data.last_obs.copy(),
-                        policy=agent_data.last_policy.copy(),
-                        reward=agent.reward,
-                        done=False,
-                        obs_next=obs
+                    step = AgentStep(
+                        obs=agent_data.last_obs.unsqueeze(0),  # .copy(),
+                        obs_next=obs.unsqueeze(0),
+                        reward=torch.tensor(agent.reward).unsqueeze(0),
+                        policy=[agent_data.last_policy],  # .copy(),
+                        done=torch.tensor(False).unsqueeze(0),
+                        aux_data=[agent_data.last_aux_data],
+                        agent_id=self.get_memory_id(agent_id),
                     )
                     # add a step to memory
-                    self._memory.append(step=step, agent_id=self.get_memory_id(agent_id))
+                    self._memory.append(step=step)
 
                     agent_data.total_reward += agent.reward
 
@@ -171,23 +191,22 @@ class UnityThread(threading.Thread):
             # INFERENCE
             if active_agents:
                 obs = get_obs0(active_agents, permute=False)
-                obs = torch.tensor(obs, dtype=torch.float32)
                 if self._params.is_image:
                     obs = obs.permute(0, 3, 1, 2)
 
-                policy = self._inferer.infer(obs, self._params.random_actions).numpy()
+                policy, aux_data = self._inferer.infer(obs, self._params.random_actions)
 
                 action_tuple = ActionTuple()
                 if discrete_action_space:
-                    action = policy.sample.argmax(axis=1).reshape(-1, 1)
+                    action = policy.sample.cpu().numpy().argmax(axis=1).reshape(-1, 1)
                     action_tuple.add_discrete(action)
                 else:
-                    action_tuple.add_continuous(policy.sample)
+                    action_tuple.add_continuous(policy.sample.cpu().numpy())
                 env.set_actions(behavior_name, action_tuple)
 
-                policies = policy.split_batch_np()
                 for agent_index, agent_id in enumerate(active_agents.agent_id):
-                    agent_data_dict[agent_id].last_policy = policies[agent_index]
+                    agent_data_dict[agent_id].last_policy = policy[agent_index]
+                    agent_data_dict[agent_id].last_aux_data = aux_data[agent_index]
 
             # STEP WORLD
             env.step()

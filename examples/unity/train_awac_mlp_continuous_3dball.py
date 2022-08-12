@@ -4,79 +4,82 @@ from agency.algo.awac.network import AwacParams
 
 import torch
 from agency.algo import awac
-from agency.algo.sac.network import (ContinuousDistParams,
-                                     MlpNetworkArchitecture)
-from agency.core.batch import create_batch
+from agency.algo.sac.network import MlpNetworkArchitecture
+from agency.algo.sac.batch import create_batch
+from agency.core import BackpropParams, GenericRlParams, DataCollectionParams
+from agency.layers.distributions import ContinuousDistParams
 from agency.core.logger import LogParams
+from agency.memory import MemoryParams
 from agency.worlds.simulator import create_unity_simulator
-from agency.core.experiment import start_experiment_helper
+from agency.core.experiment import TrainLoopParams, start_experiment_helper
+from agency.worlds.unity_env import UnityWorldParams
 
 
 @dataclass
-class WorldParams:
+class WorldParams(UnityWorldParams):
     name: str = "3DBall"
     render: bool = False
-    is_image: bool = False
-    random_actions: bool = False
     num_workers: int = 1
-
     input_size: int = 8
     num_actions: int = 2
-    use_registry: bool = True
 
 
 class HyperParams:
-    device = torch.device('cuda')
+    device = torch.device("cuda")
 
     log = LogParams(
         log_dir="/tmp/agency/logs/3dball",
-        train_samples_per_log=50_000
+        train_samples_per_log=50_000,
     )
 
-    # memory
-    max_agent_steps: int = 40_000
-    max_memory_size: int = 1_000_000
-    init_steps: int = 5000
+    train = TrainLoopParams()
+
+    memory = MemoryParams(
+        max_memory_size=1_000_000,
+    )
+
+    data = DataCollectionParams(
+        init_agent_steps=5_000,
+        init_episodes=1,
+        max_agent_steps=40_000,
+    )
 
     arch = MlpNetworkArchitecture(
         q_hidden_sizes=[256, 256],
-        p_hidden_sizes=[256, 256]
+        p_hidden_sizes=[256, 256],
     )
 
     dist = ContinuousDistParams()
 
-    # rl
-    gamma: float = 0.99
-    roll_length: int = 10
-    reward_scaling: float = 1.0
-    reward_clip_value: float = 10000.0
+    rl = GenericRlParams(
+        gamma=0.99,
+        roll_length=10,
+    )
 
-    # training
-    batch_size: int = 1000
-    learning_rate: float = 0.003
-    clip_norm: float = 10.0
+    backprop = BackpropParams(
+        batch_size=1000,
+        clip_norm=10.0,
+    )
 
-    algo = AwacParams()
+    algo = AwacParams(learning_rate=0.003)
 
     def get_fname_string_from_params(self):
-        return f"LR_{self.learning_rate}_" + \
-               f"R_{self.roll_length}_" + \
-               f"BS_{self.batch_size}_" + \
-               f"B_{self.algo.beta}_" + \
-               f"AC_{self.algo.adv_clip}_" + \
-               f"G_{self.gamma}_" + \
-               f"SOFT_{self.algo.use_softmax}_" + \
-               f"CN_{self.clip_norm}"
+        return (
+            f"LR_{self.algo.learning_rate}_"
+            + f"R_{self.rl.roll_length}_"
+            + f"BS_{self.backprop.batch_size}_"
+            + f"B_{self.algo.beta}_"
+            + f"AC_{self.algo.adv_clip}_"
+            + f"G_{self.rl.gamma}_"
+            + f"SOFT_{self.algo.use_softmax}_"
+            + f"CN_{self.backprop.clip_norm}"
+        )
 
     def randomize(self, counter):
-        self.learning_rate = random.choice([0.001, 0.003, 0.006])
-        self.roll_length = random.choice([5, 10])
-        self.batch_size = random.choice([1000, 2000, 4000])
+        self.algo.learning_rate = random.choice([0.001, 0.003, 0.006])
         self.algo.beta = random.choice([0.2])
         self.algo.adv_clip = random.choice([1, 2])
         self.algo.use_softmax = random.choice([False])
-        self.gamma = random.choice([0.99])
-        self.clip_norm = random.choice([10.0])
 
 
 if __name__ == "__main__":
@@ -89,5 +92,5 @@ if __name__ == "__main__":
         create_inferer_fn=awac.trainer.create_inferer,
         create_batch_fn=create_batch,
         train_on_batch_fn=awac.trainer.train_on_batch,
-        create_simulator_fn=create_unity_simulator
+        create_simulator_fn=create_unity_simulator,
     )

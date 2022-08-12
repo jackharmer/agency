@@ -4,7 +4,7 @@ from gym import spaces
 
 
 class IdentityEnv(gym.Env):
-    metadata = {'render.modes': ['human']}
+    metadata = {"render_modes": ["human"]}
 
     def __init__(self, num_actions=3, game_length=10, is_continuous=False):
         super().__init__()
@@ -17,7 +17,7 @@ class IdentityEnv(gym.Env):
         else:
             self.action_space = spaces.Discrete(num_actions)
 
-        self.observation_space = spaces.Box(low=0, high=1.0, shape=(num_actions,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(num_actions,), dtype=np.float32)
 
         self._debug = False
         self._counter = 0
@@ -42,7 +42,9 @@ class IdentityEnv(gym.Env):
         done = self._counter == self._game_length
 
         if self._debug:
-            print(f"obs: {self._obs}, action: {action}, reward: {reward}, done: {done}, counter: {self._counter-1}, active_index: {self._active_index}")
+            print(
+                f"obs: {self._obs}, action: {action}, reward: {reward}, done: {done}, counter: {self._counter-1}, active_index: {self._active_index}"
+            )
 
         self._active_index = self._counter % self._num_actions
         self._obs = self._create_observation(done)
@@ -54,7 +56,7 @@ class IdentityEnv(gym.Env):
         self._obs = self._create_observation(False)
         return self._obs
 
-    def render(self, mode='human'):
+    def render(self, mode="human"):
         pass
 
     def close(self):
@@ -62,9 +64,9 @@ class IdentityEnv(gym.Env):
 
     def _create_observation(self, done):
         if done:
-            obs = np.array([-1.0] * self._num_actions)
+            obs = np.array([-1.0] * self._num_actions, dtype=np.float32)
         else:
-            obs = np.array([0.0] * self._num_actions)
+            obs = np.array([0.0] * self._num_actions, dtype=np.float32)
             obs[self._active_index] = 1.0
         return obs
 

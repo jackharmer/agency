@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import math
 from typing import Any
 import numpy as np
@@ -9,77 +10,101 @@ from torch.distributions.transforms import TanhTransform
 from agency.layers.feed_forward import custom_ortho_init_
 
 
+@dataclass
+class ContinuousDistParams:
+    categorical: bool = False
+
+
+@dataclass
+class DiscreteDistParams:
+    categorical: bool = False
+    temperature: float = 4
+    hard: bool = False
+
+
 class BasePolicyOutput:
-    def _apply_func_to_members(self, func):
-        for member in self._get_members():
-            self.__dict__[member] = self._apply_func_if_not_none(func, self.__dict__[member])
-        return self
-
-    def _create_new(self, func=lambda x: x):
-        raise NotImplementedError()
-
     def _get_members(self):
         return [attr for attr in dir(self) if not callable(getattr(self, attr)) and not attr.startswith("__")]
 
-    def detach(self):
-        return self._apply_func_to_members(lambda x: x.detach())
+    def _apply_to_each_member_variable(self, func):
+        for member in self._get_members():
+            self.__dict__[member] = self._apply_to_variable_if_not_none(func, self.__dict__[member])
+        return self
 
-    def cpu(self):
-        return self._apply_func_to_members(lambda x: x.cpu())
-
-    def numpy(self):
-        return self._apply_func_to_members(lambda x: x.numpy())
-
-    def torch(self):
-        return self._apply_func_to_members(lambda x: torch.tensor(x, dtype=torch.float32))
-
-    def copy(self):
-        # This slows things down by 40%, is it needed?
-        return self._create_new(np.copy)
-        # return self._create_new(lambda x: x.copy())
-
-    def split_batch(self):
-        return [self._create_new(lambda x: x[cc].unsqueeze(0)) for cc in range(self.sample.shape[0])]
-
-    def split_batch_np(self):
-        return [self._create_new(lambda x: np.expand_dims(x[cc], axis=0)) for cc in range(self.sample.shape[0])]
-
-    def clone(self):
-        return self._create_new(lambda x: x.clone())
-
-    def _apply_func_if_not_none(self, func, val):
+    def _apply_to_variable_if_not_none(self, func, val):
         if val is None:
             return None
         return func(val)
 
+    def _create_new(self, func=lambda x: x):
+        raise NotImplementedError()
+
+    def detach(self):
+        return self._apply_to_each_member_variable(lambda x: x.detach())
+
+    def cpu(self):
+        return self._apply_to_each_member_variable(lambda x: x.cpu())
+
+    def numpy(self):
+        return self._apply_to_each_member_variable(lambda x: x.numpy())
+
+    def __getitem__(self, key):
+        return self._create_new(lambda x: x[key].unsqueeze(0))
+        # return self._create_new(lambda x: np.expand_dims(x[key], axis=0)) # numpy
+
 
 class CategoricalPolicySample(BasePolicyOutput):
     def __init__(
-            self,
-            sample: Any,
-            prob: Any = None,
-            entropy: Any = None,
+        self,
+        sample: Any,
+        probs: Any = None,
+        log_prob: Any = None,
+        entropy: Any = None,
     ):
         self.sample = sample
-        self.prob = prob
+        self.probs = probs
+        self.log_prob = log_prob
         self.entropy = entropy
 
     def _create_new(self, func=lambda x: x):
         return CategoricalPolicySample(
             sample=func(self.sample),
-            prob=self._apply_func_if_not_none(func, self.prob),
-            entropy=self._apply_func_if_not_none(func, self.entropy),
+            probs=self._apply_to_variable_if_not_none(func, self.probs),
+            log_prob=self._apply_to_variable_if_not_none(func, self.log_prob),
+            entropy=self._apply_to_variable_if_not_none(func, self.entropy),
+        )
+
+
+class DiscreteGumbelPolicySample(BasePolicyOutput):
+    def __init__(
+        self,
+        sample: Any,
+        log_prob: Any = None,
+        logits: Any = None,
+        entropy: Any = None,
+    ):
+        self.sample = sample
+        self.log_prob = log_prob
+        self.logits = logits
+        self.entropy = entropy
+
+    def _create_new(self, func=lambda x: x):
+        return DiscreteGumbelPolicySample(
+            sample=func(self.sample),
+            log_prob=self._apply_to_variable_if_not_none(func, self.log_prob),
+            logits=self._apply_to_variable_if_not_none(func, self.logits),
+            entropy=self._apply_to_variable_if_not_none(func, self.entropy),
         )
 
 
 class GaussianPolicySample(BasePolicyOutput):
     def __init__(
-            self,
-            sample: Any,
-            mu: Any = None,
-            std: Any = None,
-            log_prob: Any = None,
-            entropy: Any = None,
+        self,
+        sample: Any = None,
+        mu: Any = None,
+        std: Any = None,
+        log_prob: Any = None,
+        entropy: Any = None,
     ):
         self.sample = sample
         self.mu = mu
@@ -89,21 +114,18 @@ class GaussianPolicySample(BasePolicyOutput):
 
     def _create_new(self, func=lambda x: x):
         return GaussianPolicySample(
-            sample=func(self.sample),
-            mu=self._apply_func_if_not_none(func, self.mu),
-            std=self._apply_func_if_not_none(func, self.std),
-            log_prob=self._apply_func_if_not_none(func, self.log_prob),
-            entropy=self._apply_func_if_not_none(func, self.entropy),
+            sample=self._apply_to_variable_if_not_none(func, self.sample),
+            mu=self._apply_to_variable_if_not_none(func, self.mu),
+            std=self._apply_to_variable_if_not_none(func, self.std),
+            log_prob=self._apply_to_variable_if_not_none(func, self.log_prob),
+            entropy=self._apply_to_variable_if_not_none(func, self.entropy),
         )
 
 
 class TanhDiagNormal(TransformedDistribution):
     def __init__(self, mu, std):
         self._base_dist = Independent(Normal(mu, std), 1)
-        super().__init__(
-            self._base_dist,
-            [TanhTransform()]
-        )
+        super().__init__(self._base_dist, [TanhTransform()])
 
     def rsample(self, log_prob=False):
         sample = super().rsample()
@@ -141,31 +163,6 @@ class TanhDiagNormalCustom:
         return self._dist.entropy()
 
 
-class DiscreteGumbelPolicySample(BasePolicyOutput):
-    def __init__(
-            self,
-            sample: Any,
-            log_prob: Any = None,
-            logits: Any = None,
-    ):
-        self.sample = sample
-        self.log_prob = log_prob
-        self.logits = logits
-
-    def _modify_in_place(self, func):
-        self.sample = func(self.sample)
-        self.log_prob = self._apply_func_if_not_none(func, self.log_prob)
-        self.logits = self._apply_func_if_not_none(func, self.logits)
-        return self
-
-    def _create_new(self, func=lambda x: x):
-        return DiscreteGumbelPolicySample(
-            sample=func(self.sample),
-            log_prob=self._apply_func_if_not_none(func, self.log_prob),
-            logits=self._apply_func_if_not_none(func, self.logits),
-        )
-
-
 class GaussianPolicy(nn.Module):
     LOG_STD_MIN = -20
     LOG_STD_MAX = 2
@@ -174,16 +171,21 @@ class GaussianPolicy(nn.Module):
     EPS = 1e-8
     ACTION_EPS = 1e-3
 
-    def __init__(self, num_inputs, num_actions):
+    def __init__(self, num_inputs: int, num_actions: int, use_state_independent_std: bool = False):
         super().__init__()
         self._num_actions = num_actions
         self._mu = nn.Linear(num_inputs, num_actions)
-        self._log_std = nn.Linear(num_inputs, num_actions)
+        self._use_state_independent_std = use_state_independent_std
+
+        if self._use_state_independent_std:
+            self._log_std = torch.nn.Parameter(-0.5 * torch.ones(num_actions), requires_grad=True)
+        else:
+            self._log_std = nn.Linear(num_inputs, num_actions)
+            nn.init.xavier_uniform_(self._log_std.weight, gain=0.01)
+            nn.init.constant_(self._log_std.bias, 0.0)
 
         nn.init.xavier_uniform_(self._mu.weight, gain=0.01)
-        nn.init.xavier_uniform_(self._log_std.weight, gain=0.01)
         nn.init.constant_(self._mu.bias, 0.0)
-        nn.init.constant_(self._log_std.bias, 0.0)
 
     def log_prob_of_sample(self, sample, policy):
         dist = self.DIST_CLASS(policy.mu, policy.std)
@@ -192,7 +194,12 @@ class GaussianPolicy(nn.Module):
 
     def forward(self, state) -> GaussianPolicySample:
         mu = self._mu(state)
-        log_std = torch.clamp(self._log_std(state), self.LOG_STD_MIN, self.LOG_STD_MAX)
+
+        if self._use_state_independent_std:
+            log_std = self._log_std
+        else:
+            log_std = self._log_std(state)
+        log_std = torch.clamp(log_std, self.LOG_STD_MIN, self.LOG_STD_MAX)
         std = torch.exp(log_std)
 
         dist = self.DIST_CLASS(mu, std)
@@ -203,9 +210,9 @@ class GaussianPolicy(nn.Module):
         policy_sample = GaussianPolicySample(
             sample=sample,
             mu=mu,
-            std=std,
+            std=std.repeat(mu.shape[0], 1) if self._use_state_independent_std else std,
             log_prob=log_prob,
-            entropy=entropy
+            entropy=entropy,
         )
         return policy_sample
 
@@ -227,6 +234,7 @@ class DiscretePolicy(nn.Module):
         num_actions: (int)
         temperature: gumbel temperature parameter.
     """
+
     def __init__(self, num_inputs, num_actions, temperature, hard=False):
         super().__init__()
         self._num_actions = num_actions
@@ -242,8 +250,7 @@ class DiscretePolicy(nn.Module):
         logits = self._linear(state)
 
         dist = torch.distributions.RelaxedOneHotCategorical(
-            temperature=torch.tensor(self._temperature),
-            logits=logits
+            temperature=torch.tensor(self._temperature), logits=logits
         )
         y_soft = dist.rsample()
         log_prob = dist.log_prob(y_soft)
@@ -251,12 +258,16 @@ class DiscretePolicy(nn.Module):
         if self._hard:
             # Straight through.
             index = y_soft.max(-1, keepdim=True)[1]
-            y_hard = torch.zeros_like(logits, memory_format=torch.legacy_contiguous_format).scatter_(-1, index, 1.0)
+            y_hard = torch.zeros_like(logits, memory_format=torch.legacy_contiguous_format).scatter_(
+                -1, index, 1.0
+            )
             sample = y_hard - y_soft.detach() + y_soft
         else:
             sample = y_soft
 
-        return DiscreteGumbelPolicySample(sample=sample, log_prob=log_prob, logits=logits)
+        entropy = -log_prob
+
+        return DiscreteGumbelPolicySample(sample=sample, log_prob=log_prob, logits=logits, entropy=entropy)
 
     def random(self, batch_size):
         sample = torch.randint(self._num_actions, (batch_size, 1))
@@ -265,7 +276,7 @@ class DiscretePolicy(nn.Module):
     def log_prob_of_sample(self, sample, policy):
         dist = torch.distributions.RelaxedOneHotCategorical(
             temperature=torch.tensor(self._temperature),
-            logits=policy.logits
+            logits=policy.logits,
         )
         return dist.log_prob(sample)
 
@@ -276,6 +287,7 @@ class CategoricalPolicy(nn.Module):
         num_inputs: (int)
         num_actions: (int)
     """
+
     def __init__(self, num_inputs, num_actions):
         super().__init__()
         self._num_actions = num_actions
@@ -291,8 +303,9 @@ class CategoricalPolicy(nn.Module):
 
         policy = CategoricalPolicySample(
             sample=sample_one_hot,
-            prob=dist.probs,
-            entropy=dist.entropy()
+            probs=dist.probs,
+            log_prob=dist.log_prob(sample_one_hot),
+            entropy=dist.entropy(),
         )
         return policy
 
@@ -301,5 +314,9 @@ class CategoricalPolicy(nn.Module):
         sample_one_hot = F.one_hot(sample, num_classes=self._num_actions)
         return CategoricalPolicySample(
             sample_one_hot=sample_one_hot,
-            sample=sample
+            sample=sample,
         )
+
+    def log_prob_of_sample(self, sample, policy):
+        dist = torch.distributions.OneHotCategorical(probs=policy.probs)
+        return dist.log_prob(sample)

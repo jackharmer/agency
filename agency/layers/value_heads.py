@@ -46,3 +46,16 @@ class QHead(nn.Module):
             return self._final_layer(self._encoder(state, actions))
         else:
             return self._final_layer(self._encoder(state))
+
+
+class VHead(nn.Module):
+    def __init__(self, encoder, input_size):
+        super().__init__()
+        self._encoder = encoder
+        self._final_layer = nn.Linear(input_size, 1)
+
+        custom_ortho_init_(self._final_layer.weight, gain=1.0)
+        nn.init.constant_(self._final_layer.bias, 0.0)
+
+    def forward(self, state):
+        return self._final_layer(self._encoder(state))
