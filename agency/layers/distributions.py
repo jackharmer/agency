@@ -127,31 +127,76 @@ class ClippedTanhTransform(TanhTransform):
     EPS = 1e-6
 
     def _inverse(self, y):
-        return torch.atanh(y.clamp(-1 + self.EPS, 1 - self.EPS))
+        clamped_y = y.clamp(-1 + self.EPS, 1 - self.EPS)
+        y = clamped_y.detach() + y - y.detach()
+        return torch.atanh(y)
 
 
 class TanhDiagNormal(TransformedDistribution):
-    EPS = 1e-6
+    ACTION_EPS = 1e-6
 
     def __init__(self, mu: torch.Tensor, std: torch.Tensor):
         self._base_dist = Independent(Normal(mu, std), 1)
         super().__init__(self._base_dist, [ClippedTanhTransform()])
 
     def rsample(self, log_prob=False):
-        orig_sample = super().rsample()
-        sample = orig_sample.clamp(-1 + self.EPS, 1 - self.EPS)
+        sample = super().rsample()
+        sample = self._clamp_action(sample)
         if log_prob:
             return sample, self.log_prob(sample)
         else:
             return sample
 
+    def _clamp_action(self, sample):
+        # clamp but pass gradients freely
+        clamped_sample = sample.clamp(-1 + self.ACTION_EPS, 1 - self.ACTION_EPS)
+        return clamped_sample.detach() + sample - sample.detach()
+
     @property
     def mean(self):
-        return torch.tanh(self._base_dist.mean).clamp(-1 + self.EPS, 1 - self.EPS)
+        return self._clamp_action(torch.tanh(self._base_dist.mean))
 
     def entropy(self):
         log_prob = self.log_prob(self.rsample())
         return -log_prob.mean(0)
+
+
+class TanhDiagNormalCustom:
+    EPS = 1e-8
+    ACTION_EPS = 1e-6
+
+    def __init__(self, mu, std):
+        self._dist = Independent(Normal(mu, std), 1)
+
+    def rsample(self, log_prob=False):
+        raw_sample = self._dist.rsample()
+        sample = torch.tanh(raw_sample)
+        sample = self._clamp_action(sample)
+        if log_prob:
+            return sample, self.log_prob(sample, raw_sample)
+        else:
+            return sample
+
+    def _clamp_action(self, sample):
+        # clamp but pass gradients freely
+        clamped_sample = sample.clamp(-1 + self.ACTION_EPS, 1 - self.ACTION_EPS)
+        return clamped_sample.detach() + sample - sample.detach()
+
+    @property
+    def mean(self):
+        return self._clamp_action(torch.tanh(self._dist.mean))
+
+    def entropy(self):
+        _, log_prob = self.rsample(log_prob=True)
+        return -log_prob.mean(0)
+
+    def log_prob(self, sample, raw_sample=None):
+        if raw_sample is None:
+            raw_sample = torch.atanh(self._clamp_action(sample))
+        raw_log_prob = self._dist.log_prob(raw_sample)
+        squash_correction = torch.log(1.0 - sample.pow(2.0) + self.EPS).sum(axis=1)
+        corrected_log_prob = raw_log_prob - squash_correction
+        return corrected_log_prob
 
 
 class PredStdLayer(nn.Module):
@@ -219,7 +264,7 @@ class StdLayerSoftPlus(nn.Module):
 
     def forward(self, state: torch.Tensor):
         pre_std = self._pre_std(state)
-        std = F.softplus(pre_std.clamp)
+        std = F.softplus(pre_std)
         std = (std + self._min_std).clamp(max=self._max_std)
         return std
 
@@ -246,18 +291,19 @@ class StdLayerSigmoid(nn.Module):
 
 
 class GaussianPolicy(nn.Module):
-    DIST_CLASS = TanhDiagNormal
+    # DIST_CLASS = TanhDiagNormal
+    DIST_CLASS = TanhDiagNormalCustom
 
     def __init__(
         self,
         num_inputs: int,
         num_actions: int,
         state_independent_std: bool = False,
-        min_std=0.0001,
-        max_std=5.0,
+        min_std=1e-4,
+        max_std=2.0,
         mu_limit=None,
         out_gain=0.01,
-        std_class=StdLayerExp,
+        std_class=StdLayerSoftPlus,
     ):
         super().__init__()
         self._num_actions = num_actions

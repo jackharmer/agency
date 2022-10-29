@@ -82,7 +82,11 @@ def create_continuous_network(
     q_input_size = input_size + num_actions
 
     policy_encoder = mlp(input_size=input_size, layer_sizes=arch.p_hidden_sizes)
-    policy_dist = GaussianPolicy(arch.p_hidden_sizes[-1], num_actions)
+    policy_dist = GaussianPolicy(
+        arch.p_hidden_sizes[-1],
+        num_actions,
+        mu_limit=3.0,
+    )
     q1_encoder = mlp(input_size=q_input_size, layer_sizes=arch.q_hidden_sizes)
     q2_encoder = mlp(input_size=q_input_size, layer_sizes=arch.q_hidden_sizes)
     q1_target_encoder = mlp(input_size=q_input_size, layer_sizes=arch.q_hidden_sizes)
