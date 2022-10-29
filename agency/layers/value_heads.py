@@ -9,7 +9,7 @@ def soft_update(target, source, tau):
 
 
 class QVisionEncoder(nn.Module):
-    def __init__(self, conv_encoder, mlp_encoder):
+    def __init__(self, conv_encoder: nn.Module, mlp_encoder: nn.Module):
         super().__init__()
         self._conv_encoder = conv_encoder
         self._mlp_encoder = mlp_encoder
@@ -22,7 +22,7 @@ class QVisionEncoder(nn.Module):
 
 
 class QEncoder(nn.Module):
-    def __init__(self, encoder):
+    def __init__(self, encoder: nn.Module):
         super().__init__()
         self._encoder = encoder
 
@@ -33,7 +33,7 @@ class QEncoder(nn.Module):
 
 
 class QHead(nn.Module):
-    def __init__(self, encoder, input_size, output_size=1):
+    def __init__(self, encoder: nn.Module, input_size: int, output_size: int = 1):
         super().__init__()
         self._encoder = encoder
         self._final_layer = nn.Linear(input_size, output_size)
@@ -49,7 +49,7 @@ class QHead(nn.Module):
 
 
 class VHead(nn.Module):
-    def __init__(self, encoder, input_size):
+    def __init__(self, encoder: nn.Module, input_size: int):
         super().__init__()
         self._encoder = encoder
         self._final_layer = nn.Linear(input_size, 1)

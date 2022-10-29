@@ -1,4 +1,5 @@
 import math
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -43,25 +44,28 @@ def mlp(
 
 
 def conv_encoder(
-    input_channels,
-    layer_channels,
-    layer_kernels_sizes,
-    layer_strides,
+    input_channels: int,
+    layer_channels: list[int],
+    layer_kernels_sizes: list[int],
+    layer_strides: list[int],
+    layer_padding: list[int] = None,
     flatten=False,
     activation_layer=nn.ReLU,
 ):
     num_layers = len(layer_channels)
 
     layer_channels_full = [input_channels] + layer_channels
+    if layer_padding is None:
+        layer_padding = [0] * len(layer_channels_full)
 
     layers = []
-    for cc in range(num_layers):
+    for i in range(num_layers):
         conv = nn.Conv2d(
-            in_channels=layer_channels_full[cc],
-            out_channels=layer_channels_full[cc + 1],
-            kernel_size=layer_kernels_sizes[cc],
-            stride=layer_strides[cc],
-            padding=0,
+            in_channels=layer_channels_full[i],
+            out_channels=layer_channels_full[i + 1],
+            kernel_size=layer_kernels_sizes[i],
+            stride=layer_strides[i],
+            padding=layer_padding[i],
         )
         custom_ortho_init_(conv.weight, gain=math.sqrt(2.0))
         nn.init.constant_(conv.bias, 0.0)
@@ -71,6 +75,44 @@ def conv_encoder(
 
     if flatten:
         layers.append(torch.nn.Flatten())
+
+    return nn.Sequential(*layers)
+
+
+def upsize_conv_encoder(
+    output_channels: int,
+    layer_channels: list[int],
+    layer_kernels_sizes: list[int],
+    layer_padding: list[int],
+    layer_strides: list[tuple[int]] = None,
+    layer_output_sizes: list[tuple[int]] = None,
+    activation_layer=nn.ReLU,
+    use_final_layer_activation: bool = False,
+):
+    num_layers = len(layer_channels)
+    layer_channels_full = layer_channels + [output_channels]
+    if layer_strides is None:
+        layer_strides = [1] * len(layer_channels_full)
+
+    layers = []
+    for i in range(num_layers):
+        up = torch.nn.Upsample(size=layer_output_sizes[i], mode="nearest")
+        conv = nn.Conv2d(
+            in_channels=layer_channels_full[i],
+            out_channels=layer_channels_full[i + 1],
+            kernel_size=layer_kernels_sizes[i],
+            stride=layer_strides[i],
+            padding=layer_padding[i],
+        )
+        # custom_ortho_init_(conv.weight, gain=math.sqrt(2.0))
+        # nn.init.constant_(conv.bias, 0.0)
+
+        layers.append(up)
+        layers.append(conv)
+        layers.append(activation_layer())
+
+    if not use_final_layer_activation:
+        layers.pop()
 
     return nn.Sequential(*layers)
 

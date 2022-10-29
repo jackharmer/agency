@@ -4,9 +4,9 @@ from typing import Any
 from agency.worlds.gym_env import (
     GymThread,
     GymVecEnvThread,
+    gym_create_async_vecenv,
     gym_create_envpool_vecenv,
     gym_create_single_env,
-    gym_create_async_vecenv,
 )
 from agency.worlds.unity_env import UnityThread
 
@@ -40,7 +40,17 @@ class AsyncSimulator:
                 )
             )
 
+    def pause(self):
+        for thread in self._world_threads:
+            thread.pause()
+
+    def unpause(self):
+        for thread in self._world_threads:
+            thread.pause(False)
+
     def start(self):
+        for thread in self._world_threads:
+            thread.request_stop(False)
         for thread in self._world_threads:
             thread.start()
 
@@ -72,7 +82,7 @@ class AsyncSimulator:
         print("All threads finished")
 
     def get_agent_steps(self):
-        return self._memory.total_agent_steps()
+        return self._memory.num_completed_steps()
 
     def is_synchronous(self):
         return False

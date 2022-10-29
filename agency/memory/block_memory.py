@@ -1,8 +1,11 @@
-from abc import ABC, abstractmethod
 import collections
-from dataclasses import dataclass
+import pickle
 import threading
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Tuple
+
+import pgzip
 import torch
 
 
@@ -62,10 +65,7 @@ class BlockOfStepsMemory:
         self._num_agents = block.num_agents
 
         self._lock = threading.RLock()
-        self._write_index = 0
-        self._have_valid_data_until_index = 0
-        self._agent_step_counter = 0
-        self._completed_episodes_counter = 0
+        self.clear()
 
     # @torch.jit.export
     def append(self, step: AgentStep, **kwargs):
@@ -78,17 +78,35 @@ class BlockOfStepsMemory:
             self._write_index = self._write_index % self._max_size
             self._have_valid_data_until_index = min(self._have_valid_data_until_index, self._max_size)
 
-    def num_chunks(self):
+    def num_columns(self) -> int:
         with self._lock:
             return self._have_valid_data_until_index
 
-    def num_complete_episodes(self) -> int:
+    def num_completed_episodes(self) -> int:
         with self._lock:
             return self._completed_episodes_counter
 
-    def total_agent_steps(self) -> int:
+    def num_completed_steps(self) -> int:
         with self._lock:
             return self._agent_step_counter
+
+    def num_stored_steps(self) -> int:
+        with self._lock:
+            return self._num_agents * self._have_valid_data_until_index
+
+    def capacity(self) -> int:
+        with self._lock:
+            return self._num_agents * self._max_size
+
+    def is_full(self) -> bool:
+        with self._lock:
+            return self._have_valid_data_until_index == (self._max_size - 1)
+
+    def clear(self):
+        self._write_index = 0
+        self._have_valid_data_until_index = 0
+        self._agent_step_counter = 0
+        self._completed_episodes_counter = 0
 
     @torch.jit.export
     def sample(self, batch_size: int, roll_length: int):
@@ -121,3 +139,37 @@ class BlockOfStepsMemory:
 
             # Now sample the rollout data and return.
             return self._block.sample_batch_at_indices(roll_idx_2d, agent_idx)
+
+    # TODO: Add unit test
+    def save(self, fname, compressed=False):
+        print(f"Saving memory to: {fname}")
+        save_data = {
+            "write_index": self._write_index,
+            "have_valid_data_until_index": self._have_valid_data_until_index,
+            "agent_step_counter": self._agent_step_counter,
+            "completed_episodes_counter": self._completed_episodes_counter,
+            "block": self._block,
+        }
+        if compressed:
+            with pgzip.open(fname, "wb") as f:
+                pickle.dump(save_data, f)
+        else:
+            with open(fname, "wb") as f:
+                pickle.dump(save_data, f)
+        print(f"-- saved")
+
+    # TODO: Add unit test
+    def load(self, fname, compressed=False):
+        print(f"Loading memory from: {fname}")
+        if compressed:
+            with pgzip.open(fname, "rb") as f:
+                load_data = pickle.load(f)
+        else:
+            with open(fname, "rb") as f:
+                load_data = pickle.load(f)
+        self._write_index = load_data["write_index"]
+        self._have_valid_data_until_index = load_data["have_valid_data_until_index"]
+        self._agent_step_counter = load_data["agent_step_counter"]
+        self._completed_episodes_counter = load_data["completed_episodes_counter"]
+        self._block = load_data["block"]
+        print(f"-- loaded {self.num_stored_steps()} steps")

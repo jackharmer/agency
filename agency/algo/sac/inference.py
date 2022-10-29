@@ -1,5 +1,6 @@
-from typing import Any
 from dataclasses import dataclass
+from typing import Any
+
 import torch
 
 
@@ -14,8 +15,9 @@ class Inferer:
     net: Any
     num_actions: int
     device: Any
+    return_aux_data: bool = True
 
-    def infer(self, obs, random_actions: bool = False, return_aux_data: bool = True) -> Any:
+    def infer(self, obs, random_actions: bool = False) -> Any:
         if random_actions:
             with torch.no_grad():
                 policy = self.net.policy.random(obs.shape[0])
@@ -23,7 +25,7 @@ class Inferer:
             with torch.no_grad():
                 policy = self.net.policy(obs.to(self.device))
 
-        if return_aux_data:
+        if self.return_aux_data:
             return policy.detach(), EmptyAuxData()
         else:
             return policy.detach()

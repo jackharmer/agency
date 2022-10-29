@@ -1,4 +1,4 @@
-name: agency
+name: agency_private
 channels:
   - pytorch
   - conda-forge
@@ -7,12 +7,14 @@ dependencies:
   - pytorch=1.12.0
   - torchvision=0.13.0
   - cudatoolkit=11.3
+  # - cudatoolkit=10.2 # You may need this instead when using WSL
   - pip
   - pip:
     - "git+https://github.com/jackharmer/gym-minigrid.git"
-    - gym[atari,Box2D,other,accept-rom-license]==0.24.0
+    - gym[atari,Box2D,other,accept-rom-license]==0.25.1
     - pytest
     - mlagents_envs==0.28.0
     - tensorboard
     - atari_py
     - envpool
+    - pgzip

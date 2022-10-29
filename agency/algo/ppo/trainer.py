@@ -30,7 +30,9 @@ def create_train_state_data(net: PpoNetwork, hp, wp):
     # eps = 1e-5
     if not hp.algo.use_dual_optimizer:
         p_optimizer = torch.optim.Adam(
-            list(net.value.parameters()) + list(net.policy.parameters()), lr=hp.algo.p_learning_rate, eps=eps
+            list(net.value.parameters()) + list(net.policy.parameters()),
+            lr=hp.algo.p_learning_rate,
+            eps=eps,
         )
         v_optimizer = None
     else:
@@ -85,7 +87,7 @@ def train_on_batch(net: PpoNetwork, td: PpoTrainData, mb: PpoBatch, fetch_log_da
 
     # value loss
     v_error = v_bootstrap - v_pred
-    v_loss = v_error**2
+    v_loss = v_error ** 2
     if td.algo.clip_value_function:
         v_pred_delta = v_pred - mb.value
         v_pred_clip = mb.value + v_pred_delta.clamp(-td.algo.v_clip, td.algo.v_clip)

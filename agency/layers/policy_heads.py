@@ -15,5 +15,11 @@ class PolicyHead(nn.Module):
     def log_prob_of_sample(self, sample, policy):
         return self._policy.log_prob_of_sample(sample, policy)
 
+    def make_batch(self, list_of_policies):
+        return self._policy.make_batch(list_of_policies)
+
+    def make_distribution(self, policy):
+        return self._policy.make_distribution(policy)
+
     def random(self, batch_size):
         return self._policy.random(batch_size)

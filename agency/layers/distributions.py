@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import math
-from typing import Any
+from re import I
+from typing import Any, Optional
 import numpy as np
 import torch
 import torch.nn as nn
@@ -122,104 +123,201 @@ class GaussianPolicySample(BasePolicyOutput):
         )
 
 
+class ClippedTanhTransform(TanhTransform):
+    EPS = 1e-6
+
+    def _inverse(self, y):
+        return torch.atanh(y.clamp(-1 + self.EPS, 1 - self.EPS))
+
+
 class TanhDiagNormal(TransformedDistribution):
-    def __init__(self, mu, std):
+    EPS = 1e-6
+
+    def __init__(self, mu: torch.Tensor, std: torch.Tensor):
         self._base_dist = Independent(Normal(mu, std), 1)
-        super().__init__(self._base_dist, [TanhTransform()])
+        super().__init__(self._base_dist, [ClippedTanhTransform()])
 
     def rsample(self, log_prob=False):
-        sample = super().rsample()
+        orig_sample = super().rsample()
+        sample = orig_sample.clamp(-1 + self.EPS, 1 - self.EPS)
         if log_prob:
             return sample, self.log_prob(sample)
         else:
             return sample
 
+    @property
+    def mean(self):
+        return torch.tanh(self._base_dist.mean).clamp(-1 + self.EPS, 1 - self.EPS)
+
     def entropy(self):
-        # TODO
-        return self._base_dist.entropy()
+        log_prob = self.log_prob(self.rsample())
+        return -log_prob.mean(0)
 
 
-class TanhDiagNormalCustom:
-    EPS = 1e-8
-
-    def __init__(self, mu, std):
-        self._dist = Normal(mu, std)
-
-    def rsample(self, log_prob=False):
-        raw_sample = self._dist.rsample()
-        sample = torch.tanh(raw_sample)
-        if log_prob:
-            return sample, self.log_prob(sample, raw_sample)
+class PredStdLayer(nn.Module):
+    def __init__(
+        self,
+        num_inputs: int,
+        num_outputs: int,
+        out_gain: float = 0.01,
+        state_independent_std: bool = False,
+        state_independent_init: float = 0.5,
+    ):
+        super().__init__()
+        self._state_independent_std = state_independent_std
+        if state_independent_std:
+            self._pre_std = torch.nn.Parameter(
+                state_independent_init * torch.ones(num_outputs), requires_grad=True
+            )
         else:
-            return sample
+            self._pre_std = nn.Linear(num_inputs, num_outputs)
+            nn.init.xavier_uniform_(self._pre_std.weight, gain=out_gain)
+            nn.init.constant_(self._pre_std.bias, 0.0)
 
-    def log_prob(self, sample, raw_sample):
-        raw_log_prob = self._dist.log_prob(raw_sample).sum(axis=-1)
-        squash_correction = torch.log(1.0 - sample.pow(2.0) + self.EPS).sum(axis=1)
-        corrected_log_prob = raw_log_prob - squash_correction
-        return corrected_log_prob
+    def forward(self, state: torch.Tensor):
+        if self._state_independent_std:
+            return self._pre_std.repeat(state.shape[0], 1)
+        else:
+            return self._pre_std(state)
 
-    def entropy(self):
-        return self._dist.entropy()
+
+class StdLayerExp(nn.Module):
+    def __init__(
+        self,
+        num_inputs: int,
+        num_outputs: int,
+        state_independent_std: bool = False,
+        min_std: float = 0.001,
+        max_std: float = 2.0,
+        out_gain: float = 0.01,
+    ):
+        super().__init__()
+        self._log_min_std = math.log(min_std)
+        self._log_max_std = math.log(max_std)
+        self._pre_std = PredStdLayer(num_inputs, num_outputs, out_gain, state_independent_std, -0.7)
+
+    def forward(self, state: torch.Tensor):
+        pre_std = self._pre_std(state)
+        std = torch.exp(pre_std.clamp(self._log_min_std, self._log_max_std))
+        return std
+
+
+class StdLayerSoftPlus(nn.Module):
+    def __init__(
+        self,
+        num_inputs: int,
+        num_outputs: int,
+        state_independent_std: bool = False,
+        min_std: float = 0.001,
+        max_std: float = 2.0,
+        out_gain: float = 0.01,
+    ):
+        super().__init__()
+        self._min_std = min_std
+        self._max_std = max_std
+        self._pre_std = PredStdLayer(num_inputs, num_outputs, out_gain, state_independent_std)
+
+    def forward(self, state: torch.Tensor):
+        pre_std = self._pre_std(state)
+        std = F.softplus(pre_std.clamp)
+        std = (std + self._min_std).clamp(max=self._max_std)
+        return std
+
+
+class StdLayerSigmoid(nn.Module):
+    def __init__(
+        self,
+        num_inputs: int,
+        num_outputs: int,
+        state_independent_std: bool = False,
+        min_std: float = 0.001,
+        max_std: float = 2.0,
+        out_gain: float = 0.01,
+    ):
+        super().__init__()
+        self._min_std = min_std
+        self._max_std = max_std
+        self._pre_std = PredStdLayer(num_inputs, num_outputs, out_gain, state_independent_std)
+
+    def forward(self, state: torch.Tensor):
+        pre_std = self._pre_std(state)
+        std = self._max_std * F.sigmoid(pre_std / self._max_std) + self._min_std
+        return std
 
 
 class GaussianPolicy(nn.Module):
-    LOG_STD_MIN = -20
-    LOG_STD_MAX = 2
-    # DIST_CLASS = TanhDiagNormal
-    DIST_CLASS = TanhDiagNormalCustom
-    EPS = 1e-8
-    ACTION_EPS = 1e-3
+    DIST_CLASS = TanhDiagNormal
 
-    def __init__(self, num_inputs: int, num_actions: int, use_state_independent_std: bool = False):
+    def __init__(
+        self,
+        num_inputs: int,
+        num_actions: int,
+        state_independent_std: bool = False,
+        min_std=0.0001,
+        max_std=5.0,
+        mu_limit=None,
+        out_gain=0.01,
+        std_class=StdLayerExp,
+    ):
         super().__init__()
         self._num_actions = num_actions
+        self._mu_limit = mu_limit
+        self._eps = 1e-8
+        self._action_eps = 1e-3
+
         self._mu = nn.Linear(num_inputs, num_actions)
-        self._use_state_independent_std = use_state_independent_std
+        self._std = std_class(
+            num_inputs,
+            num_actions,
+            state_independent_std=state_independent_std,
+            min_std=min_std,
+            max_std=max_std,
+            out_gain=out_gain,
+        )
 
-        if self._use_state_independent_std:
-            self._log_std = torch.nn.Parameter(-0.5 * torch.ones(num_actions), requires_grad=True)
-        else:
-            self._log_std = nn.Linear(num_inputs, num_actions)
-            nn.init.xavier_uniform_(self._log_std.weight, gain=0.01)
-            nn.init.constant_(self._log_std.bias, 0.0)
-
-        nn.init.xavier_uniform_(self._mu.weight, gain=0.01)
+        nn.init.xavier_uniform_(self._mu.weight, gain=out_gain)
         nn.init.constant_(self._mu.bias, 0.0)
 
-    def log_prob_of_sample(self, sample, policy):
-        dist = self.DIST_CLASS(policy.mu, policy.std)
-        raw_sample = torch.atanh(torch.clamp(sample, -1 + self.ACTION_EPS, 1 - self.ACTION_EPS))
-        return dist.log_prob(sample, raw_sample)
-
-    def forward(self, state) -> GaussianPolicySample:
+    def forward(self, state: torch.Tensor) -> GaussianPolicySample:
         mu = self._mu(state)
+        if self._mu_limit is not None:
+            mu = self._mu_limit * F.tanh(mu / self._mu_limit)
 
-        if self._use_state_independent_std:
-            log_std = self._log_std
-        else:
-            log_std = self._log_std(state)
-        log_std = torch.clamp(log_std, self.LOG_STD_MIN, self.LOG_STD_MAX)
-        std = torch.exp(log_std)
+        std = self._std(state)
 
         dist = self.DIST_CLASS(mu, std)
         sample, log_prob = dist.rsample(log_prob=True)
 
-        entropy = -log_prob
+        sample_entropy = -log_prob
 
         policy_sample = GaussianPolicySample(
             sample=sample,
             mu=mu,
-            std=std.repeat(mu.shape[0], 1) if self._use_state_independent_std else std,
+            std=std,
             log_prob=log_prob,
-            entropy=entropy,
+            entropy=sample_entropy,
         )
         return policy_sample
 
-    def random(self, batch_size):
+    def random(self, batch_size: int):
         sample = torch.rand(batch_size, self._num_actions) * 2.0 - 1.0
-        sample = torch.clamp(sample, -1 + self.ACTION_EPS, 1 - self.ACTION_EPS)
+        sample = torch.clamp(sample, -1 + self._action_eps, 1 - self._action_eps)
         return GaussianPolicySample(sample=sample)
+
+    def log_prob_of_sample(self, sample: torch.Tensor, policy: GaussianPolicySample):
+        return self.make_distribution(policy).log_prob(sample)
+
+    def make_distribution(self, policy: GaussianPolicySample):
+        return self.DIST_CLASS(policy.mu, policy.std)
+
+    def make_batch(self, list_of_policy_samples: list[GaussianPolicySample]):
+        return GaussianPolicySample(
+            sample=torch.cat([other.sample for other in list_of_policy_samples]),
+            mu=torch.cat([other.mu for other in list_of_policy_samples]),
+            std=torch.cat([other.std for other in list_of_policy_samples]),
+            log_prob=torch.cat([other.log_prob for other in list_of_policy_samples]),
+            entropy=torch.cat([other.entropy for other in list_of_policy_samples]),
+        )
 
 
 class DiscretePolicy(nn.Module):
@@ -265,6 +363,7 @@ class DiscretePolicy(nn.Module):
         else:
             sample = y_soft
 
+        # entropy = dist.entropy() # Not implemented for RelaxedOneHotCategorical
         entropy = -log_prob
 
         return DiscreteGumbelPolicySample(sample=sample, log_prob=log_prob, logits=logits, entropy=entropy)
@@ -274,11 +373,21 @@ class DiscretePolicy(nn.Module):
         return DiscreteGumbelPolicySample(sample=sample)
 
     def log_prob_of_sample(self, sample, policy):
-        dist = torch.distributions.RelaxedOneHotCategorical(
+        return self.make_distribution(policy).log_prob(sample)
+
+    def make_distribution(self, policy):
+        return torch.distributions.RelaxedOneHotCategorical(
             temperature=torch.tensor(self._temperature),
             logits=policy.logits,
         )
-        return dist.log_prob(sample)
+
+    def make_batch(self, list_of_policy_samples):
+        return DiscreteGumbelPolicySample(
+            sample=torch.cat([other.sample for other in list_of_policy_samples]),
+            log_prob=torch.cat([other.log_prob for other in list_of_policy_samples]),
+            logits=torch.cat([other.logits for other in list_of_policy_samples]),
+            entropy=torch.cat([other.entropy for other in list_of_policy_samples]),
+        )
 
 
 class CategoricalPolicy(nn.Module):
@@ -312,11 +421,18 @@ class CategoricalPolicy(nn.Module):
     def random(self, batch_size):
         sample = torch.randint(self._num_actions, (batch_size, 1))
         sample_one_hot = F.one_hot(sample, num_classes=self._num_actions)
-        return CategoricalPolicySample(
-            sample_one_hot=sample_one_hot,
-            sample=sample,
-        )
+        return CategoricalPolicySample(sample_one_hot=sample_one_hot, sample=sample)
 
     def log_prob_of_sample(self, sample, policy):
-        dist = torch.distributions.OneHotCategorical(probs=policy.probs)
-        return dist.log_prob(sample)
+        return self.make_distribution(policy).log_prob(sample)
+
+    def make_distribution(self, policy):
+        return torch.distributions.OneHotCategorical(probs=policy.probs)
+
+    def make_batch(self, list_of_policy_samples):
+        return CategoricalPolicySample(
+            sample=torch.cat([other.sample for other in list_of_policy_samples]),
+            probs=torch.cat([other.probs for other in list_of_policy_samples]),
+            log_prob=torch.cat([other.log_prob for other in list_of_policy_samples]),
+            entropy=torch.cat([other.entropy for other in list_of_policy_samples]),
+        )

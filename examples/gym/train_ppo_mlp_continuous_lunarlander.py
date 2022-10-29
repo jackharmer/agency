@@ -2,9 +2,9 @@ from dataclasses import dataclass
 
 import agency.algo.ppo as ppo
 import torch
-from agency.algo.ppo.network import MlpNetworkArchitecture, PpoParams
 from agency.algo.ppo.batch import create_batch
-from agency.core import BackpropParams, GenericRlParams, DataCollectionParams
+from agency.algo.ppo.network import MlpNetworkArchitecture, PpoParams
+from agency.core import BackpropParams, DataCollectionParams, GenericRlParams
 from agency.core.experiment import TrainLoopParams, start_experiment_helper
 from agency.core.logger import LogParams
 from agency.layers.distributions import ContinuousDistParams
@@ -109,5 +109,7 @@ if __name__ == "__main__":
         train_on_batch_fn=ppo.trainer.train_on_batch,
         create_simulator_fn=create_gym_simulator,
         create_batch_fn=ppo.batch.create_batch_from_block_memory if hp.use_prealloc_memory else create_batch,
-        create_memory_fn=ppo.memory.create_block_memory if hp.use_prealloc_memory else create_episodic_memory,
+        create_memory_fn=ppo.memory.create_block_memory
+        if hp.use_prealloc_memory
+        else create_episodic_memory,
     )
