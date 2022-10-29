@@ -4,12 +4,12 @@ from dataclasses import dataclass
 import torch
 from agency.algo import awac, sac
 from agency.algo.awac.network import AwacParams
-from agency.algo.sac.network import MlpNetworkArchitecture
-from agency.core import BackpropParams, GenericRlParams, DataCollectionParams
-from agency.layers.distributions import ContinuousDistParams
 from agency.algo.sac.batch import create_batch
+from agency.algo.sac.network import MlpNetworkArchitecture
+from agency.core import BackpropParams, DataCollectionParams, GenericRlParams
 from agency.core.experiment import TrainLoopParams, start_experiment_helper
 from agency.core.logger import LogParams
+from agency.layers.distributions import ContinuousDistParams
 from agency.memory import MemoryParams, create_episodic_memory
 from agency.worlds.gym_env import GymWorldParams
 from agency.worlds.simulator import create_gym_simulator
@@ -23,6 +23,7 @@ class WorldParams(GymWorldParams):
     num_workers: int = 100
     input_size: int = 8 * 3
     num_actions: int = 2
+    frame_stack: int = 3
 
 
 class HyperParams:

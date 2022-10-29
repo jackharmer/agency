@@ -16,7 +16,7 @@ from agency.core.experiment import start_experiment_helper, TrainLoopParams
 
 @dataclass
 class WorldParams(GymWorldParams):
-    name: str = "CarRacing-v1"
+    name: str = "CarRacing-v2"
     env_class: str = "box2d"
     is_image: bool = True
     input_size: Tuple[int, int, int] = (3, 84, 84)

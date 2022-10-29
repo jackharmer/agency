@@ -3,16 +3,28 @@ import torch
 from torch._six import inf
 
 
-def calculate_conv_output_size(in_size, out_channels, kernels, strides, padding=None, dilation=None):
+def calculate_conv_layer_sizes(in_size, kernels, strides, padding=None, dilation=None):
     if padding is None:
         padding = [0] * len(kernels)
     if dilation is None:
         dilation = [1] * len(kernels)
     out_size = list(in_size)
+    output_sizes = [tuple([int(o) for o in out_size])]
     for kernel, stride, pad, dil in zip(kernels, strides, padding, dilation):
         out_size[0] = ((out_size[0] + 2.0 * pad - (dil * (kernel - 1)) - 1) // stride) + 1
         out_size[1] = ((out_size[1] + 2.0 * pad - (dil * (kernel - 1)) - 1) // stride) + 1
-    return int(out_size[0] * out_size[1] * out_channels)
+        output_sizes.append(tuple([int(o) for o in out_size]))
+    return output_sizes
+
+
+def calculate_conv_output_size(
+    in_size, out_channels, kernels, strides, padding=None, dilation=None, flat=True
+):
+    out_sizes = calculate_conv_layer_sizes(in_size, kernels, strides, padding, dilation)
+    if flat:
+        return int(out_sizes[-1][0] * out_sizes[-1][1] * out_channels)
+    else:
+        return (out_sizes[-1][0], out_sizes[-1][1], int(out_channels))
 
 
 # Modified version of pytorch clip_grad_norm, to add a clip argument, such that we get grad norms

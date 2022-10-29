@@ -25,6 +25,7 @@ class WorldParams(GymWorldParams):
     num_workers: int = 200
     num_actions: int = 6
     use_envpool: bool = True
+    frame_stack: int = 2
 
     def __post_init__(self):
         if self.use_envpool:

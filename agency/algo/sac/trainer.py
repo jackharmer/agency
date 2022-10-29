@@ -62,7 +62,7 @@ def train_on_batch(net: Any, td: SacTrainData, mb: SacBatch, fetch_log_data: boo
     # q1 update
     q1_pred = net.q1(mb.obs, mb.actions)
     error1 = q1_pred - soft_v_bootstrap
-    q1_loss = 0.5 * (error1**2).mean()
+    q1_loss = 0.5 * (error1 ** 2).mean()
 
     # q1 backprop
     td.q1_optimizer.zero_grad()
@@ -75,7 +75,7 @@ def train_on_batch(net: Any, td: SacTrainData, mb: SacBatch, fetch_log_data: boo
     # q2 update
     q2_pred = net.q2(mb.obs, mb.actions)
     error2 = q2_pred - soft_v_bootstrap
-    q2_loss = 0.5 * (error2**2).mean()
+    q2_loss = 0.5 * (error2 ** 2).mean()
 
     # q2 backprop
     td.q2_optimizer.zero_grad()
@@ -104,7 +104,11 @@ def train_on_batch(net: Any, td: SacTrainData, mb: SacBatch, fetch_log_data: boo
     if fetch_log_data:
         # LOGGING INFO
         if len(mb.obs.shape) == 4:
-            I = mb.obs[0:3, 0:3, :, :] if mb.obs.shape[1] == 3 else mb.obs[0:3, :, :, :].mean(1, keepdim=True)
+            I = (
+                mb.obs[0:3, 0:3, :, :]
+                if mb.obs.shape[1] == 3
+                else mb.obs[0:3, :, :, :].mean(1, keepdim=True)
+            )
             image_logs["obs/image"] = tensor_to_numpy(I)
         scalar_logs["obs/obs_min"] = tensor_to_numpy(mb.obs.min())
         scalar_logs["obs/obs_max"] = tensor_to_numpy(mb.obs.max())
@@ -291,7 +295,9 @@ def create_train_state_data(net, hp, wp):
         alpha_optimizer=alpha_optimizer,
         gamma_matrix=make_gamma_matrix(hp.rl.gamma, hp.rl.roll_length).to(hp.device),
         target_entropy=torch.tensor(
-            hp.algo.target_entropy_constant * target_entropy_factor, dtype=torch.float32, requires_grad=False
+            hp.algo.target_entropy_constant * target_entropy_factor,
+            dtype=torch.float32,
+            requires_grad=False,
         ),
         clip_norm=hp.backprop.clip_norm,
         reward_scaling=hp.rl.reward_scaling,

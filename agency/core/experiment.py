@@ -44,11 +44,11 @@ def get_unique_exp_path(directory, desired_name):
 
 
 def collect_initial_data(memory, min_steps=0, min_episodes=1, sleep_time=1.0):
-    mem_steps = memory.total_agent_steps()
-    while mem_steps < min_steps or memory.num_complete_episodes() < min_episodes:
+    mem_steps = memory.num_completed_steps()
+    while mem_steps < min_steps or memory.num_completed_episodes() < min_episodes:
         sleep(sleep_time)
-        mem_steps = memory.total_agent_steps()
-        print(f"steps: {mem_steps}, episodes: {memory.num_complete_episodes()}")
+        mem_steps = memory.num_completed_steps()
+        print(f"steps: {mem_steps}, episodes: {memory.num_completed_episodes()}")
 
 
 @dataclass

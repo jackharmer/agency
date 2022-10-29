@@ -1,14 +1,14 @@
 from dataclasses import dataclass
 from typing import Any, Union
-import torch
 
+import torch
 import torch.nn as nn
 from agency.layers.distributions import (
     CategoricalPolicy,
+    ContinuousDistParams,
+    DiscreteDistParams,
     DiscretePolicy,
     GaussianPolicy,
-    DiscreteDistParams,
-    ContinuousDistParams,
 )
 from agency.layers.feed_forward import InputNormalizer, conv_encoder, mlp
 from agency.layers.policy_heads import PolicyHead
@@ -59,9 +59,7 @@ class ConvNetworkArchitecture:
 
 def create_distribution_layer(dist, input_size: int, num_actions: int, algo: PpoParams):
     if type(dist) is ContinuousDistParams:
-        policy = GaussianPolicy(
-            input_size, num_actions, use_state_independent_std=algo.use_state_independent_std
-        )
+        policy = GaussianPolicy(input_size, num_actions, state_independent_std=algo.use_state_independent_std)
     elif type(dist) is DiscreteDistParams:
         if dist.categorical:
             policy = CategoricalPolicy(input_size, num_actions)

@@ -43,7 +43,7 @@ class BaseHyperParams:
 
     data = DataCollectionParams(
         init_agent_steps=2_000,
-        max_agent_steps=80_000,
+        max_agent_steps=100_000,
     )
 
     arch = VisionNetworkArchitecture(

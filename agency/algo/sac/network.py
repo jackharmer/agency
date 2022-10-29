@@ -197,10 +197,14 @@ def create_discrete_network(
         q1=QHead(QEncoder(q1_encoder), input_size=arch.q_hidden_sizes[-1], output_size=q_output_size),
         q2=QHead(QEncoder(q2_encoder), input_size=arch.q_hidden_sizes[-1], output_size=q_output_size),
         q1_target=QHead(
-            QEncoder(q1_target_encoder), input_size=arch.q_hidden_sizes[-1], output_size=q_output_size
+            QEncoder(q1_target_encoder),
+            input_size=arch.q_hidden_sizes[-1],
+            output_size=q_output_size,
         ),
         q2_target=QHead(
-            QEncoder(q2_target_encoder), input_size=arch.q_hidden_sizes[-1], output_size=q_output_size
+            QEncoder(q2_target_encoder),
+            input_size=arch.q_hidden_sizes[-1],
+            output_size=q_output_size,
         ),
         policy=policy,
         log_alpha=torch.tensor(np.log(algo.init_alpha), dtype=torch.float32, requires_grad=True),

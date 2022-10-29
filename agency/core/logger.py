@@ -1,9 +1,16 @@
 from dataclasses import dataclass
-from typing import Any
+import dataclasses
 from enum import Enum
-from agency.tools.timer import TimeDelta
+from typing import Any
+
 import torch
+from agency.tools.timer import TimeDelta
 from torch.utils.tensorboard import SummaryWriter
+
+try:
+    import wandb
+except:
+    pass
 
 
 class LogOn(Enum):
@@ -17,6 +24,7 @@ class TrainLogInfo:
     scalar_logs_dict: Any
     dist_logs_dict: Any
     image_logs_dict: Any = None
+    video_logs_dict: Any = None
 
 
 @dataclass
@@ -43,6 +51,9 @@ class Logger:
         agent_steps_per_log: str,
         train_samples_per_log: str,
         log_on: LogOn = LogOn.TRAIN_SAMPLES,
+        log_to_terminal: bool = True,
+        use_wandb: bool = False,
+        wandb_project_name: str = "unknown",
     ):
         self._log_on = log_on
         self._agent_steps_per_log = agent_steps_per_log
@@ -57,15 +68,27 @@ class Logger:
         self._train_samples = 0
         self._last_log_agent_steps = 0
         self._last_log_train_samples = 0
+        self._log_to_terminal = log_to_terminal
 
         self._time_delta = TimeDelta()
-        self._writer = SummaryWriter(experiment_path)
+        self._use_wandb = use_wandb
+
+        if self._use_wandb:
+            wandb.init(project=wandb_project_name, config={"name": wandb_project_name}, save_code=True)
+            wandb.run.log_code(".", include_fn=lambda path: path.endswith(".py"))
+        else:
+            self._writer = SummaryWriter(experiment_path)
 
     def log_hyper_params(self, hp):
-        pass
+        if self._use_wandb:
+            hp_dict = dataclasses.asdict(hp)
+            wandb.config.update(hp_dict)
 
     def log_model(self, model, inputs=None):
-        self._writer.add_graph(model, input_to_model=inputs)
+        if self._use_wandb:
+            wandb.watch(model, log_freq=100, log_graph=False, log="all")
+        else:
+            self._writer.add_graph(model, input_to_model=inputs)
 
     def update(
         self,
@@ -73,7 +96,7 @@ class Logger:
         update_steps,
         train_samples,
         episode_infos,
-        train_info,
+        train_info: TrainLogInfo,
     ):
         # check this prior to updating agent_steps/train_samples.
         ready_for_log = self.should_log()
@@ -93,7 +116,9 @@ class Logger:
 
             # TODO move train_info to train_infos buffer
             self._log(train_info)
-            self._writer.flush()
+
+            if not self._use_wandb:
+                self._writer.flush()
 
     def _log(self, train_info):
         agent_steps = self._agent_steps
@@ -106,43 +131,100 @@ class Logger:
             self._num_episodes += num_infos
             rewards = [x.reward for x in self._episode_infos_buffer]
             num_steps = [x.steps for x in self._episode_infos_buffer]
+            videos = [x.video_data for x in self._episode_infos_buffer if x.video_data is not None]
             mean_reward = sum(rewards) / float(num_infos)
             mean_episode_length = float(sum(num_steps)) / float(num_infos)
 
             # self._writer.add_histogram('rewards/reward', np.asarray(self._episode_infos_buffer[0].rewards), agent_steps)
             self._episode_infos_buffer = []
 
-            self._writer.add_scalar("rewards/reward", mean_reward, agent_steps)
-            self._writer.add_scalar("rewards/reward_vs_ep", mean_reward, self._num_episodes)
-            self._writer.add_scalar("environment/episode_length", mean_episode_length, agent_steps)
+            if len(videos) > 0:
+                video: torch.Tensor = torch.stack(videos, dim=0)
+
+            if self._use_wandb:
+                wandb.log(
+                    {
+                        "rewards/reward": mean_reward,
+                        "rewards/reward_vs_ep": mean_reward,
+                        "environment/episode_length": mean_episode_length,
+                    },
+                    step=agent_steps,
+                )
+                if len(videos) > 0:
+                    wandb.log({"videos/episode": wandb.Video(video.cpu().numpy(), fps=30)}, step=agent_steps)
+            else:
+                self._writer.add_scalar("rewards/reward", mean_reward, agent_steps)
+                self._writer.add_scalar("rewards/reward_vs_ep", mean_reward, self._num_episodes)
+                self._writer.add_scalar("environment/episode_length", mean_episode_length, agent_steps)
+                if len(videos) > 0:
+                    self._writer.add_video("videos/episode", video, agent_steps, fps=30)
             reward_string = f"R: {mean_reward:.1f}"
             ep_len_string = f"EL: {mean_episode_length:.1f}"
         else:
             reward_string = "R: --.--"
             ep_len_string = "EL: --"
 
-        print(
-            time_string
-            + ", "
-            + reward_string
-            + ", "
-            + ep_len_string
-            + f", SAMP: {self._train_samples}, STEPS: {self._agent_steps}"
-            + f", SPS: {self._agent_sps:.1f}, BPS: {self._train_sps:.1f}"
-        )
-        self._writer.add_scalar("training_stats/train_samples", train_samples, agent_steps)
+        if self._log_to_terminal:
+            print(
+                time_string
+                + ", "
+                + reward_string
+                + ", "
+                + ep_len_string
+                + f", SAMP: {self._train_samples}, STEPS: {self._agent_steps}"
+                + f", SPS: {self._agent_sps:.1f}, BPS: {self._train_sps:.1f}"
+            )
+        if self._use_wandb:
+            wandb.log(
+                {
+                    "training_stats/agent_steps": self._agent_steps,
+                    "training_stats/train_samples": train_samples,
+                    "performance/agent_steps_per_second": self._agent_sps,
+                    "performance/samples_per_second": self._train_sps,
+                },
+                step=agent_steps,
+            )
+            wandb.log(train_info.scalar_logs_dict, step=agent_steps)
 
-        self._writer.add_scalar("performance/agent_steps_per_second", self._agent_sps, agent_steps)
-        self._writer.add_scalar("performance/samples_per_second", self._train_sps, agent_steps)
+            # for k, v in train_info.dist_logs_dict.items():
+            #     self._writer.add_histogram(k, v, agent_steps)
 
-        for k, v in train_info.scalar_logs_dict.items():
-            self._writer.add_scalar(k, v, agent_steps)
+            if train_info.image_logs_dict is not None:
+                wandb.log(
+                    {k: wandb.Image(v.float()) for k, v in train_info.image_logs_dict.items()},
+                    step=agent_steps,
+                )
 
-        for k, v in train_info.dist_logs_dict.items():
-            self._writer.add_histogram(k, v, agent_steps)
+            if train_info.video_logs_dict is not None:
+                wandb.log(
+                    {k: wandb.Video(v.cpu().numpy(), fps=30) for k, v in train_info.video_logs_dict.items()},
+                    step=agent_steps,
+                )
 
-        for k, v in train_info.image_logs_dict.items():
-            self._writer.add_images(k, v, agent_steps)
+        else:
+            self._writer.add_scalar("training_stats/train_samples", train_samples, agent_steps)
+            self._writer.add_scalar("performance/agent_steps_per_second", self._agent_sps, agent_steps)
+            self._writer.add_scalar("performance/samples_per_second", self._train_sps, agent_steps)
+
+            for k, v in train_info.scalar_logs_dict.items():
+                self._writer.add_scalar(k, v, agent_steps)
+
+            # for k, v in train_info.scalar_logs_dict.items():
+            #     self._writer.add_scalar(k + "_vs_samples", v, train_samples)
+
+            for k, v in train_info.dist_logs_dict.items():
+                self._writer.add_histogram(k, v, agent_steps)
+
+            if train_info.image_logs_dict is not None:
+                for k, v in train_info.image_logs_dict.items():
+                    self._writer.add_images(k, v, agent_steps)
+
+            if train_info.video_logs_dict is not None:
+                for k, v in train_info.video_logs_dict.items():
+                    self._writer.add_video(k, v, agent_steps, fps=30)
+
+            # for k, v in train_info.image_logs_dict.items():
+            #     self._writer.add_images(k + "_vs_samples", v, train_samples)
 
     def should_log(self) -> bool:
         if self._log_on == LogOn.TRAIN_SAMPLES:
@@ -151,16 +233,44 @@ class Logger:
             return (self._agent_steps - self._last_log_agent_steps) > self._agent_steps_per_log
 
     def stop(self):
-        self._writer.close()
+        if not self._use_wandb:
+            self._writer.close()
 
     def start_timers(self):
         self._time_delta.reset()
 
 
-def log_grads_and_vars(log_name, named_parameters, scalar_logs, dist_log_dict):
-    for n, v in named_parameters:
-        if (v.requires_grad) and ("bias" not in n):
-            scalar_logs[log_name + "_grads/" + n] = v.grad.abs().sum()
-            scalar_logs[log_name + "_params/" + n] = v.abs().mean()
-            dist_log_dict[log_name + "_params/" + n] = v[:].detach().cpu().numpy()
-            # dist_log_dict["policy_grads/"+n] = v.grad[:].detach().cpu().numpy()
+def log_grads_and_vars(
+    log_name,
+    named_parameters,
+    scalar_logs,
+    dist_log_dict=None,
+    log_dists: bool = False,
+    lr: float = None,
+):
+    g_name = "grads/" + log_name + "/"
+    gw_name = "grads_weight_ratio/" + log_name + "/"
+    gws_name = "grads_weight_ratio_scaled/" + log_name + "/"
+    w_name = "weights/" + log_name + "/"
+
+    for n, w in named_parameters:
+        is_bias = "bias" in n
+        if (w.requires_grad) and not is_bias:
+            w_abs = w.abs()
+            scalar_logs[w_name + n] = w_abs.mean()
+
+            if w.grad is None:
+                scalar_logs[g_name + n] = 0
+            else:
+                g_abs = w.grad.abs()
+                scalar_logs[g_name + n] = g_abs.mean()
+
+            if w.grad is not None:
+                gw_ratio: torch.Tensor = (g_abs / w_abs).mean()
+                scalar_logs[gw_name + n] = gw_ratio
+                if lr is not None:
+                    scalar_logs[gws_name + n] = (lr * gw_ratio).log10()
+
+            if dist_log_dict is not None and log_dists:
+                dist_log_dict[w_name + n] = w[:].detach().cpu().numpy()
+                # dist_log_dict["policy_grads/"+n] = v.grad[:].detach().cpu().numpy()

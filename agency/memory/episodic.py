@@ -112,10 +112,10 @@ class EpisodicMemory:
         with self._lock:
             return sum([x.count() for x in self._completed_episodes])
 
-    def num_complete_episodes(self) -> int:
+    def num_completed_episodes(self) -> int:
         return len(self._completed_episodes)
 
-    def total_agent_steps(self) -> int:
+    def num_completed_steps(self) -> int:
         with self._lock:
             return self._agent_step_counter
 
@@ -140,7 +140,7 @@ class EpisodicMemory:
             return rolls
 
     def sample_random_episodes(self, num_episodes):
-        indices = np.random.randint(0, self.num_complete_episodes(), num_episodes)
+        indices = np.random.randint(0, self.num_completed_episodes(), num_episodes)
         episodes = [self._completed_episodes[cc] for cc in indices]
         return episodes
 
@@ -200,7 +200,7 @@ class ThreadSafeBuffer:
 
 
 class StepMemory(ThreadSafeBuffer):
-    def total_agent_steps(self) -> int:
+    def num_completed_steps(self) -> int:
         return self._total_appends
 
     def sample_steps_batch(self, batch_size: int):

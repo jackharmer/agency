@@ -1,7 +1,7 @@
-from typing import Any
 from dataclasses import dataclass
-import torch
+from typing import Any
 
+import torch
 from agency.memory.block_memory import AgentStep, BlockOfSteps
 
 
@@ -18,8 +18,9 @@ class PpoInferer:
     net: Any
     num_actions: int
     device: Any
+    return_aux_data: bool = True
 
-    def infer(self, obs, random_actions: bool = False, return_aux_data: bool = True) -> Any:
+    def infer(self, obs, random_actions: bool = False) -> Any:
         obs = obs.to(self.device)
 
         if random_actions:
@@ -29,7 +30,7 @@ class PpoInferer:
             with torch.no_grad():
                 policy = self.net.policy(obs)
 
-        if return_aux_data:
+        if self.return_aux_data:
             with torch.no_grad():
                 aux_data = PpoAuxData(value=self.net.value(obs).detach())
             return policy.detach(), aux_data

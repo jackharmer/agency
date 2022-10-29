@@ -16,6 +16,7 @@ from mlagents_envs.base_env import ActionTuple
 class EpisodeInfo:
     reward: float
     steps: int
+    video_data: np.ndarray = None
 
 
 @dataclass
@@ -65,9 +66,13 @@ class UnityThread(threading.Thread):
         self._num_steps = 1_000_000_000
         self._has_stopped = False
         self._should_stop = False
+        self._should_pause = False
 
-    def request_stop(self):
-        self._should_stop = True
+    def request_stop(self, should_stop: bool = True):
+        self._should_stop = should_stop
+
+    def pause(self, should_pause: bool):
+        self._should_pause = should_pause
 
     def stop(self):
         pass
@@ -131,6 +136,8 @@ class UnityThread(threading.Thread):
             return obs
 
         while (step_count < self._num_steps) and not self._should_stop:
+            while self._should_pause and not self._should_stop:
+                time.sleep(1.0)
             active_agents, terminal_agents = env.get_steps(behavior_name)
             step_count += len(active_agents)
 
