@@ -1,4 +1,4 @@
-name: agency_private
+name: agency
 channels:
   - pytorch
   - conda-forge
