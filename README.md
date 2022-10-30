@@ -32,16 +32,16 @@ This repo is for quickly testing out new ideas in RL, with an emphasis on simpli
 * PPO (N-step)
 ### Distributions:
 |      | Continuous | Categorical | Gumbel |
-|:-----|------------|-------------|--------|
-| SAC  | X | X | X |
-| AWAC | X | - | X |
-| PPO  | X | X | X |
+| :--- | ---------- | ----------- | ------ |
+| SAC  | X          | X           | X      |
+| AWAC | X          | -           | X      |
+| PPO  | X          | X           | X      |
 ### Architectures:
 |      | MLP | Convolutional |
-|:-----|-----|---------------|
-| SAC  | X | X |
-| AWAC | X | X |
-| PPO  | X | X |
+| :--- | --- | ------------- |
+| SAC  | X   | X             |
+| AWAC | X   | X             |
+| PPO  | X   | X             |
 ### Environments:
 * Gym
 * Unity mlagents
@@ -51,6 +51,7 @@ This repo is for quickly testing out new ideas in RL, with an emphasis on simpli
 
 
 ## ⚙️ Installation
+Either run the following, or go to the docker section below:
 ```bash
 conda env create -f conda_env.yaml
 conda activate agency
@@ -99,6 +100,20 @@ See train_sac_mlp_continuous_lunarlander.py for an example of how to randomize h
 python examples/gym/train_sac_mlp_continuous_lunarlander.py --sweep --n 10
 ```
 
+## ⚙️ Docker
+1. Install docker and nvidia-docker.
+2. Build the container:
+```bash
+./docker_build.sh
+```
+3. Run the tests using code from the current working directory:
+```bash
+./docker_run.sh python -m pytest tests
+```
+4. Launch a training run
+```bash
+./docker_run.sh python examples/gym/train_sac_mlp_continuous_lunarlander.py
+```
 
 ## 🔔 Tips and Tricks
 ### Setting up WSLg
