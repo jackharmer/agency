@@ -212,7 +212,7 @@ class PredStdLayer(nn.Module):
         self._state_independent_std = state_independent_std
         if state_independent_std:
             self._pre_std = torch.nn.Parameter(
-                state_independent_init * torch.ones(num_outputs), requires_grad=True
+                state_independent_init * torch.ones(num_outputs, requires_grad=True), requires_grad=True
             )
         else:
             self._pre_std = nn.Linear(num_inputs, num_outputs)
@@ -235,11 +235,14 @@ class StdLayerExp(nn.Module):
         min_std: float = 0.001,
         max_std: float = 2.0,
         out_gain: float = 0.01,
+        state_independent_init: float = -0.7,
     ):
         super().__init__()
         self._log_min_std = math.log(min_std)
         self._log_max_std = math.log(max_std)
-        self._pre_std = PredStdLayer(num_inputs, num_outputs, out_gain, state_independent_std, -0.7)
+        self._pre_std = PredStdLayer(
+            num_inputs, num_outputs, out_gain, state_independent_std, state_independent_init
+        )
 
     def forward(self, state: torch.Tensor):
         pre_std = self._pre_std(state)
@@ -256,11 +259,14 @@ class StdLayerSoftPlus(nn.Module):
         min_std: float = 0.001,
         max_std: float = 2.0,
         out_gain: float = 0.01,
+        state_independent_init: float = 0.5,
     ):
         super().__init__()
         self._min_std = min_std
         self._max_std = max_std
-        self._pre_std = PredStdLayer(num_inputs, num_outputs, out_gain, state_independent_std)
+        self._pre_std = PredStdLayer(
+            num_inputs, num_outputs, out_gain, state_independent_std, state_independent_init
+        )
 
     def forward(self, state: torch.Tensor):
         pre_std = self._pre_std(state)

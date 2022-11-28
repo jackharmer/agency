@@ -1,5 +1,5 @@
 import math
-
+from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
@@ -49,8 +49,9 @@ def conv_encoder(
     layer_kernels_sizes: list[int],
     layer_strides: list[int],
     layer_padding: list[int] = None,
-    flatten=False,
-    activation_layer=nn.ReLU,
+    flatten: bool = False,
+    activation_layer: Any = nn.ReLU,
+    use_group_norm: bool = False,
 ):
     num_layers = len(layer_channels)
 
@@ -71,6 +72,8 @@ def conv_encoder(
         nn.init.constant_(conv.bias, 0.0)
 
         layers.append(conv)
+        if use_group_norm:
+            layers.append(nn.GroupNorm(1, layer_channels_full[i + 1]))
         layers.append(activation_layer())
 
     if flatten:
@@ -129,8 +132,11 @@ class GradientBlocker(nn.Module):
 
 
 class InputNormalizer(torch.nn.Module):
-    def __init__(self, obs_shape, device="cuda"):
+    def __init__(self, obs_shape, device="cuda", clamp=True, clamp_val=4.0, mean_dims: tuple[int] = (0,)):
         super().__init__()
+        self.clamp = clamp
+        self.clamp_val = clamp_val
+        self.mean_dims = mean_dims
         self.register_buffer("count", torch.ones((), dtype=torch.float64, device=device))
         self.register_buffer("running_mean", torch.zeros(obs_shape, dtype=torch.float64, device=device))
         self.register_buffer("running_var", torch.ones(obs_shape, dtype=torch.float64, device=device))
@@ -140,21 +146,29 @@ class InputNormalizer(torch.nn.Module):
         batch_size = obs.shape[0]
         total_count = self.count + batch_size
 
-        mean_diff = obs.mean([0]) - self.running_mean
+        mean_diff = obs.mean(self.mean_dims) - self.running_mean
         weighted_mean_diff_sq = mean_diff**2 * self.count * batch_size / total_count / total_count
         weighted_running_var = self.running_var * self.count / total_count
-        weighted_obs_var = obs.var([0]) * batch_size / total_count
+        weighted_obs_var = obs.var(self.mean_dims) * batch_size / total_count
 
         self.running_mean = self.running_mean + mean_diff * batch_size / total_count
         self.running_var = weighted_running_var + weighted_obs_var + weighted_mean_diff_sq
-        self.running_count = total_count
+        self.count = total_count
 
     @torch.jit.export
     def normalize(self, obs):
         if self.training:
             self.update_normalization(obs)
         std = torch.sqrt(self.running_var.float() + 1e-5)
-        return (obs - self.running_mean.float()) / std
+        obs = (obs - self.running_mean.float()) / std
+        if self.clamp:
+            obs = torch.clamp(obs, min=-self.clamp_val, max=self.clamp_val)
+        return obs
+
+    @torch.jit.export
+    def reverse_norm(self, obs):
+        std = torch.sqrt(self.running_var.float() + 1e-5)
+        return (obs * std) + self.running_mean.float()
 
     @torch.jit.export
     def forward(self, obs):

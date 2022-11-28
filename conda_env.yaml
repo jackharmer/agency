@@ -2,12 +2,13 @@ name: agency
 channels:
   - pytorch
   - conda-forge
+  - nvidia # for brax
 dependencies:
   - python=3.9
   - pytorch=1.12.0
   - torchvision=0.13.0
   - cudatoolkit=11.3
-  # - cudatoolkit=10.2 # You may need this instead when using WSL
+  - cuda-nvcc # for brax
   - pip
   - pip:
     - "git+https://github.com/jackharmer/gym-minigrid.git"
@@ -17,4 +18,9 @@ dependencies:
     - tensorboard
     - atari_py
     - envpool
+    - einops
     - pgzip
+    - --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    - jax[cuda]==0.3.25
+    - brax==0.0.13
+    - wandb

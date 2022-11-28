@@ -10,7 +10,8 @@ from agency.algo.ppo.batch import PpoBatch
 from agency.algo.ppo.inference import PpoInferer
 from agency.core.logger import TrainLogInfo, log_grads_and_vars
 from agency.layers.distributions import GaussianPolicySample
-from agency.tools.gamma_matrix import discount, make_gamma_matrix
+from agency.layers.feed_forward import InputNormalizer
+from agency.tools.gamma_matrix import discount, make_gamma_matrix, gae_discount
 from agency.tools.helpers import clip_grad_norm_, tensor_to_numpy
 
 
@@ -19,10 +20,7 @@ class PpoTrainData:
     p_optimizer: Any
     v_optimizer: Any
     gamma_matrix: torch.Tensor
-    clip_norm: float
-    reward_scaling: float
-    reward_clip_value: float
-    algo: PpoParams
+    value_normalizer: Any
 
 
 def create_train_state_data(net: PpoNetwork, hp, wp):
@@ -43,10 +41,7 @@ def create_train_state_data(net: PpoNetwork, hp, wp):
         p_optimizer=p_optimizer,
         v_optimizer=v_optimizer,
         gamma_matrix=make_gamma_matrix(hp.rl.gamma, hp.rl.roll_length).to(hp.device),
-        clip_norm=hp.backprop.clip_norm,
-        reward_scaling=hp.rl.reward_scaling,
-        reward_clip_value=hp.rl.reward_clip_value,
-        algo=hp.algo,
+        value_normalizer=InputNormalizer((1,), device=hp.device, clamp=False),
     )
     return train_data
 
@@ -60,7 +55,9 @@ def create_inferer(net, wp, device):
 
 
 @torch.jit.export
-def train_on_batch(net: PpoNetwork, td: PpoTrainData, mb: PpoBatch, fetch_log_data: bool) -> TrainLogInfo:
+def train_on_batch(
+    hp: Any, net: PpoNetwork, td: PpoTrainData, mb: PpoBatch, fetch_log_data: bool
+) -> TrainLogInfo:
     debug_grads = False
     scalar_logs, dist_logs, image_logs = {}, {}, {}
 
@@ -68,7 +65,11 @@ def train_on_batch(net: PpoNetwork, td: PpoTrainData, mb: PpoBatch, fetch_log_da
     reward_min = mb.rewards.min()
     reward_max = mb.rewards.max()
 
-    rewards = torch.clamp(mb.rewards * td.reward_scaling, -td.reward_clip_value, td.reward_clip_value)
+    rewards = torch.clamp(
+        mb.rewards * hp.rl.reward_scaling, -hp.rl.reward_clip_value, hp.rl.reward_clip_value
+    )
+
+    old_values = mb.value
 
     # forward pass
     v_pred = net.value(mb.obs)
@@ -78,55 +79,85 @@ def train_on_batch(net: PpoNetwork, td: PpoTrainData, mb: PpoBatch, fetch_log_da
 
     # target value
     with torch.no_grad():
-        v_bootstrap = discount(rewards, v_pred_next, td.gamma_matrix, mb.terminal_mask).detach()
+        if hp.algo.normalize_value:
+            v_pred_next_unnormed = td.value_normalizer.reverse_norm(v_pred_next)
+            v_pred_unnormed = td.value_normalizer.reverse_norm(v_pred)
+        else:
+            v_pred_unnormed = v_pred
+            v_pred_next_unnormed = v_pred_next
 
-        advantage = v_bootstrap - v_pred
-        if td.algo.normalize_advantage:
+        if hp.algo.use_terminal_masking:
+            next_term_mask = mb.terminal_mask
+        else:
+            next_term_mask = torch.ones_like(mb.terminal_mask)
+
+        if hp.algo.use_gae:
+            v_bootstrap = gae_discount(
+                rewards,
+                v_pred_unnormed,
+                v_pred_next_unnormed,
+                next_term_mask,
+                hp.rl.gamma,
+                lamb=hp.algo.gae_lambda,
+            ).detach()
+        else:
+            v_bootstrap = discount(rewards, v_pred_next_unnormed, td.gamma_matrix, next_term_mask).detach()
+
+        advantage = v_bootstrap - v_pred_unnormed
+
+        if hp.algo.normalize_advantage:
             advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
         advantage = advantage.detach().squeeze()
 
+        if hp.algo.normalize_value:
+            v_bootstrap = td.value_normalizer(v_bootstrap)
+
     # value loss
     v_error = v_bootstrap - v_pred
-    v_loss = v_error ** 2
-    if td.algo.clip_value_function:
-        v_pred_delta = v_pred - mb.value
-        v_pred_clip = mb.value + v_pred_delta.clamp(-td.algo.v_clip, td.algo.v_clip)
+    v_loss = v_error**2
+    if hp.algo.clip_value_function:
+        v_pred_delta = v_pred - old_values
+        v_pred_clip = old_values + v_pred_delta.clamp(-hp.algo.v_clip, hp.algo.v_clip)
         v_loss_clip = (v_bootstrap - v_pred_clip) ** 2
         v_loss = torch.max(v_loss, v_loss_clip)
     v_loss = v_loss.mean()
+    v_loss = hp.algo.v_loss_scaling * v_loss
+
+    if hp.algo.normalize_value:
+        v_pred = v_pred_unnormed
 
     # ratio = prob(a) / old_prob(a) = exp(prob(a) - old_prob(a))
     ratio = torch.exp(net.policy.log_prob_of_sample(mb.actions, curr_policy) - mb.policy_log_prob)
 
     surr1 = advantage * ratio
-    surr2 = advantage * ratio.clamp(1.0 - td.algo.ppo_clip, 1.0 + td.algo.ppo_clip)
+    surr2 = advantage * ratio.clamp(1.0 - hp.algo.ppo_clip, 1.0 + hp.algo.ppo_clip)
     p_loss = -torch.min(surr1, surr2)
     p_loss = p_loss.mean()
 
     # entropy loss
-    entropy_loss = -td.algo.entropy_loss_scaling * curr_policy.entropy
+    entropy_loss = -hp.algo.entropy_loss_scaling * curr_policy.entropy
     entropy_loss = entropy_loss.mean()
 
     # backprop
-    if td.algo.use_dual_optimizer:
+    if hp.algo.use_dual_optimizer:
         p_loss = p_loss + entropy_loss
 
         td.p_optimizer.zero_grad()
         p_loss.backward()
-        p_grad_norm = clip_grad_norm_(net.policy.parameters(), td.clip_norm)
+        p_grad_norm = clip_grad_norm_(net.policy.parameters(), hp.backprop.clip_norm)
         td.p_optimizer.step()
 
         td.v_optimizer.zero_grad()
         v_loss.backward()
-        v_grad_norm = clip_grad_norm_(net.value.parameters(), td.clip_norm)
+        v_grad_norm = clip_grad_norm_(net.value.parameters(), hp.backprop.clip_norm)
         td.v_optimizer.step()
     else:
-        p_loss = p_loss + entropy_loss + 0.5 * v_loss
+        total_loss = p_loss + entropy_loss + 0.5 * v_loss
 
         td.p_optimizer.zero_grad()
-        p_loss.backward()
+        total_loss.backward()
         params = list(net.value.parameters()) + list(net.policy.parameters())
-        p_grad_norm = clip_grad_norm_(params, td.clip_norm)
+        p_grad_norm = clip_grad_norm_(params, hp.backprop.clip_norm)
         td.p_optimizer.step()
 
     if fetch_log_data:
@@ -144,7 +175,7 @@ def train_on_batch(net: PpoNetwork, td: PpoTrainData, mb: PpoBatch, fetch_log_da
         # Grads
         # scalar_logs["grads/norm"] = tensor_to_numpy(grad_norm)
         scalar_logs["grads/policy_norm"] = tensor_to_numpy(p_grad_norm)
-        if td.algo.use_dual_optimizer:
+        if hp.algo.use_dual_optimizer:
             scalar_logs["grads/value_norm"] = tensor_to_numpy(v_grad_norm)
 
         # Params

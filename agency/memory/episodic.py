@@ -163,6 +163,11 @@ class ThreadSafeBuffer:
             self._memory.append(step)
             self._total_appends += 1
 
+    def extend(self, steps: list[EpisodicMemoryStep]):
+        with self._lock:
+            for step in steps:
+                self.append(step)
+
     def count(self) -> int:
         with self._lock:
             return len(self._memory)

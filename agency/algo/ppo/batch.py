@@ -26,6 +26,7 @@ class PpoBlockOfSteps(BlockOfSteps):
         num_elements: int,
         obs_size: Union[Tuple[int], int],
         num_actions: int,
+        is_circular: bool,
         device: torch.device,
     ):
         self._num_agents = num_agents
@@ -43,6 +44,8 @@ class PpoBlockOfSteps(BlockOfSteps):
         self.action = torch.zeros(block_size + self._action_size, device=device)
         self.policy_log_prob = torch.zeros(block_size, device=device)
         self.done = torch.zeros(block_size, device=device)
+
+        self._is_circular = is_circular
 
     def write_at_index(self, step: AgentStep, write_index: int):
         self.obs[:, write_index, :] = step.obs
@@ -79,6 +82,41 @@ class PpoBlockOfSteps(BlockOfSteps):
             num_rolls=num_rolls,
             batch_size=batch_size,
         )
+
+    @property
+    def is_circular(self):
+        return self._is_circular
+
+    def sample_all(self, chunks: int = 1):
+        clone_and_chunk = lambda x: torch.chunk(x.detach().clone(), chunks)
+
+        obs = clone_and_chunk(self.obs)
+        obs_next = clone_and_chunk(self.obs_next[:, -1, :])
+        actions = clone_and_chunk(self.action)
+        terminal_mask = clone_and_chunk(1.0 - self.done)
+        rewards = clone_and_chunk(self.reward)
+        policy_log_prob = clone_and_chunk(self.policy_log_prob)
+        value = clone_and_chunk(self.value)
+
+        batches = []
+        for i in range(chunks):
+            num_rolls = obs[i].shape[0]
+            roll_length = obs[i].shape[1]
+            batch_size = num_rolls * roll_length
+            batches.append(
+                PpoBatch(
+                    obs=obs[i].view(batch_size, *self._obs_size),
+                    obs_next=obs_next[i],
+                    actions=actions[i].view(batch_size, -1),
+                    terminal_mask=terminal_mask[i],
+                    rewards=rewards[i],
+                    policy_log_prob=policy_log_prob[i].view(-1),
+                    value=value[i].view(batch_size, -1),
+                    num_rolls=num_rolls,
+                    batch_size=batch_size,
+                )
+            )
+        return batches
 
 
 @torch.jit.script

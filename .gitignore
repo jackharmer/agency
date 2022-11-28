@@ -30,3 +30,5 @@ pip-delete-this-directory.txt
 .dir-locals.el
 src/
 .vscode/
+wandb/
+experiments/

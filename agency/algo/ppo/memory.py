@@ -4,5 +4,12 @@ from agency.memory.block_memory import BlockOfStepsMemory
 
 def create_block_memory(hp, wp):
     max_size = hp.memory.max_memory_size // wp.num_workers
-    sd = PpoBlockOfSteps(wp.num_workers, max_size, wp.input_size, wp.num_actions, hp.device)
+    sd = PpoBlockOfSteps(
+        wp.num_workers,
+        max_size,
+        wp.input_size,
+        wp.num_actions,
+        hp.memory.is_circular,
+        hp.device,
+    )
     return BlockOfStepsMemory(sd, device=hp.device)

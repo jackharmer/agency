@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from functools import partial
-from nis import cat
 from typing import Tuple
 from agency.algo.ppo.network import ConvNetworkArchitecture, PpoParams
 from agency.core import BackpropParams, GenericRlParams, DataCollectionParams
@@ -47,7 +46,7 @@ class HyperParams:
     )
 
     data = DataCollectionParams(
-        init_agent_steps=5_000,
+        init_agent_steps=10_000,
         max_agent_steps=5_000_000,
     )
 
@@ -67,18 +66,20 @@ class HyperParams:
     )
 
     backprop = BackpropParams(
-        batch_size=2000,
+        batch_size=512,
         clip_norm=1.0,
     )
 
     algo = PpoParams(
-        p_learning_rate=0.0004,
-        v_learning_rate=0.0004,
+        p_learning_rate=0.0003,
+        v_learning_rate=0.0003,
         ppo_clip=0.2,
         v_clip=0.2,
         clip_value_function=False,
         entropy_loss_scaling=0.01,
-        normalize_advantage=False,
+        use_gae=True,
+        normalize_advantage=True,
+        normalize_value=True,
         use_dual_optimizer=False,
     )
 
@@ -90,12 +91,11 @@ class HyperParams:
             + f"BS_{self.backprop.batch_size}_"
             + f"G_{self.rl.gamma}_"
             + f"CN_{self.backprop.clip_norm}_"
-            + f"TEMP_{self.dist.temperature}_"
             + f"HS_{self.arch.v_hidden_sizes}"
         )
 
     def randomize(self, counter):
-        self.dist.temperature = [1.0, 2.0, 3.0, 4.0][counter % 4]
+        pass
 
 
 if __name__ == "__main__":
@@ -104,7 +104,7 @@ if __name__ == "__main__":
         "PONG_CATEGORICAL_PPO",
         hp=hp,
         wp=WorldParams(),
-        create_network_fn=partial(ppo.network.create_vision_network, normalize_input=False),
+        create_network_fn=partial(ppo.network.create_vision_network, normalize_input=True),
         create_train_data_fn=ppo.trainer.create_train_state_data,
         create_inferer_fn=ppo.trainer.create_inferer,
         create_batch_fn=ppo.batch.create_batch_from_block_memory,

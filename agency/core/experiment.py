@@ -1,4 +1,5 @@
 import argparse
+import random
 from dataclasses import dataclass
 import math
 import os
@@ -54,6 +55,7 @@ def collect_initial_data(memory, min_steps=0, min_episodes=1, sleep_time=1.0):
 @dataclass
 class TrainLoopParams:
     max_backprop_steps: int = math.inf
+    post_backprop_sleep: float = 0.0
 
 
 def train_loop(
@@ -78,7 +80,13 @@ def train_loop(
         mini_batch = create_batch_fn(rolls, hp.device)
 
         # with Timer(text="train: {:.4f}"):
-        train_info = train_on_batch_fn(net, train_data, mini_batch, logger.should_log())
+        # with torch.cuda.amp.autocast(enabled=True):
+        train_info = train_on_batch_fn(hp, net, train_data, mini_batch, logger.should_log())
+
+        # This is useful for slowing down the backprops in order to give more compute resources
+        # to the environments.
+        if hp.train.post_backprop_sleep > 0:
+            sleep(hp.train.post_backprop_sleep)
 
         train_samples += train_info.samples
 
@@ -111,6 +119,7 @@ def start_training(
     episode_info_buffer,
     create_batch_fn,
     train_on_batch_fn,
+    train_loop_fn,
     hp,
     debug=False,
     episode_info_output_buffer=None,  # permament store for episode infos
@@ -128,7 +137,7 @@ def start_training(
     logger.log_hyper_params(hp)
 
     print("START TRAINING")
-    train_loop(
+    train_loop_fn(
         net,
         simulator,
         memory,
@@ -157,6 +166,7 @@ def start_experiment(
     train_on_batch_fn,
     create_simulator_fn,
     create_memory_fn,
+    train_loop_fn=train_loop,
 ):
     print_header(exp_name)
     print(hp.device)
@@ -191,12 +201,15 @@ def start_experiment(
             agent_steps_per_log=hp.log.agent_steps_per_log,
             train_samples_per_log=hp.log.train_samples_per_log,
             log_on=hp.log.log_on,
+            use_wandb=hp.log.use_wandb,
+            wandb_project_name=hp.log.wandb_project_name,
         ),
         episode_info_buffer=episode_info_buffer,
         create_batch_fn=create_batch_fn,
         train_on_batch_fn=train_on_batch_fn,
         hp=hp,
         episode_info_output_buffer=episode_info_output_buffer,
+        train_loop_fn=train_loop_fn,
     )
     return episode_info_output_buffer
 
@@ -208,20 +221,24 @@ def launch_experiment_sweeps(
     hp: Any,  # Hyper Parameters
     wp: Any,  # World Parameters
     start_experiment_fn: Any,
-    torch_seed: int = None,
-    np_seed: int = None,
+    seed: int = None,
 ):
     torch.set_num_threads(torch.get_num_threads())
-    if torch_seed is not None:
-        torch.manual_seed(torch_seed)
-    if np_seed is not None:
-        np.random.seed(np_seed)
+    if seed is not None:
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        random.seed(seed)
 
     for N in range(num_experiments):
         if param_sweep:
             print(f"------- Parameter Sweep, Experiment: {N} -------")
             hp.randomize(N)
-        start_experiment_fn(hp=hp, wp=wp, exp_name=base_name + "_" + hp.get_fname_string_from_params())
+        start_experiment_fn(
+            hp=hp,
+            wp=wp,
+            exp_name=base_name + "_" + hp.get_fname_string_from_params(),
+        )
 
 
 def start_experiment_helper(
@@ -235,6 +252,8 @@ def start_experiment_helper(
     train_on_batch_fn,
     create_simulator_fn,
     create_memory_fn=create_episodic_memory,
+    train_loop_fn=train_loop,
+    seed: int = None,
 ):
     torch.set_printoptions(precision=8)
 
@@ -260,5 +279,7 @@ def start_experiment_helper(
             train_on_batch_fn=train_on_batch_fn,
             create_simulator_fn=create_simulator_fn,
             create_memory_fn=create_memory_fn,
+            train_loop_fn=train_loop_fn,
         ),
+        seed=seed,
     )

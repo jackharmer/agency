@@ -1,4 +1,5 @@
 import torch
+from einops import rearrange
 
 
 # Construct a gamma matrix for optimised discount calculations.
@@ -68,3 +69,25 @@ def discount(
     out = torch.reshape(discount_matrix, (discount_matrix.shape[0] * discount_matrix.shape[1], 1))
 
     return out
+
+
+def gae_discount(
+    rewards: torch.Tensor,
+    values: torch.Tensor,
+    last_value: torch.Tensor,
+    terminal_mask: torch.Tensor,
+    gamma: float = 0.99,
+    lamb: float = 0.97,
+):
+    roll_length = rewards.shape[1]
+    values = rearrange(values, "(b r) 1 -> b r", r=roll_length)
+    next_values = torch.cat([values[:, 1:], last_value], 1)
+    advantage = (rewards + gamma * terminal_mask * next_values) - values
+    gae_list = []
+    curr_g_adv = advantage[:, -1]
+    for i in reversed(range(roll_length)):
+        curr_g_adv = advantage[:, i] + lamb * gamma * terminal_mask[:, i] * curr_g_adv
+        gae_list.append(curr_g_adv)
+    gae_advantage = torch.stack(list(reversed(gae_list)), dim=1)
+    v_bootstrap = gae_advantage + values
+    return v_bootstrap.view(-1, 1)

@@ -1,8 +1,67 @@
-from typing import Any, Callable
+from typing import Any, Callable, Optional
+import os
 import gym
 import numpy as np
 import pygame
+from brax import jumpy as jp
+from brax.envs import env as brax_env
+from brax.envs import wrappers
+from brax.io import html
+from brax.io.file import File
+from brax.io.file import MakeDirs
 from gym import ObservationWrapper
+
+
+class BraxVectorGymWrapperWithHtmlRendering(wrappers.VectorGymWrapper):
+    def __init__(
+        self,
+        env: brax_env.Env,
+        seed: int = 0,
+        backend: Optional[str] = None,
+        render: bool = True,
+        episodes_per_render: int = 4,
+    ):
+        super().__init__(env, seed, backend)
+        self._render = render
+        self._episodes_per_render = episodes_per_render
+        self._episode_counter = 0
+        if self._render:
+            self.episode_rollouts_agent0 = []
+
+    def reset(self):
+        self._state, obs, self._key = self._reset(self._key)
+        if self._render:
+            self.episode_rollouts_agent0 = [jp.take(self._state.qp, 0)]
+        return obs
+
+    def step(self, action):
+        self._state, obs, reward, done, info = self._step(self._state, action)
+        if self._render:
+            self.episode_rollouts_agent0.append(jp.take(self._state.qp, 0))
+            _truncated = info["truncation"][0] if "truncation" in info else False
+            _done = done[0]
+            if _done or _truncated:
+                self._episode_counter += 1
+                if self._episode_counter % self._episodes_per_render == 0:
+                    self._save_episode_as_html()
+                self.episode_rollouts_agent0 = []
+        return obs, reward, done, info
+
+    def render(self, mode="human"):
+        pass
+
+    def _save_episode_as_html(self):
+        print("saving html episode")
+        path = "/tmp/html/brax_episode.html"  # TODO: make this an input.
+        sys = self._env.unwrapped.sys
+        qps = self.episode_rollouts_agent0
+        # html.save_html(path, sys, qps, make_dir=True)
+        MakeDirs(os.path.dirname(path))
+        with File(path, "w") as fout:
+            fout.write(html.render(sys, qps, height=960))
+
+    def close(self):
+        pass
 
 
 class PygameRgbArrayRenderer(gym.Wrapper):

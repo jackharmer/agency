@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Union
 
 import torch
@@ -35,7 +36,11 @@ class PpoParams:
     v_clip: float = 0.2
     clip_value_function: bool = False
     entropy_loss_scaling: float = 0.001
+    v_loss_scaling: float = 1.0
     normalize_advantage: bool = False
+    normalize_value: bool = False
+    use_gae: bool = False
+    gae_lambda: float = 0.95
     use_dual_optimizer: bool = False  # Use different optimizers for the value function and policy nets
     use_terminal_masking: bool = True
     use_state_independent_std: bool = True
@@ -76,6 +81,7 @@ def create_network(
     dist: Union[ContinuousDistParams, DiscreteDistParams],
     algo: PpoParams,
     num_actions: int,
+    activation=nn.ReLU,
 ):
     if arch.shared_hidden_sizes is None:
         print("using seperate network architectures")
@@ -94,12 +100,20 @@ def create_network(
     )
 
     # create the value and policy encoders.
-    v_enc = mlp(enc_input_size, arch.v_hidden_sizes) if arch.v_hidden_sizes is not None else nn.Identity()
-    p_enc = mlp(enc_input_size, arch.p_hidden_sizes) if arch.p_hidden_sizes is not None else nn.Identity()
+    v_enc = (
+        mlp(enc_input_size, arch.v_hidden_sizes, activation_layer=activation)
+        if arch.v_hidden_sizes is not None
+        else nn.Identity()
+    )
+    p_enc = (
+        mlp(enc_input_size, arch.p_hidden_sizes, activation_layer=activation)
+        if arch.p_hidden_sizes is not None
+        else nn.Identity()
+    )
 
     # preprend a shared encoder, if required.
     if arch.shared_hidden_sizes is not None:
-        shared_enc = mlp(input_size, arch.shared_hidden_sizes)
+        shared_enc = mlp(input_size, arch.shared_hidden_sizes, activation_layer=activation)
         v_enc = nn.Sequential(shared_enc, v_enc)
         p_enc = nn.Sequential(shared_enc, p_enc)
 
@@ -119,6 +133,7 @@ def create_vision_network(
     algo: PpoParams,
     num_actions: int,
     normalize_input: bool = False,
+    activation=nn.ReLU,
 ):
     enc_input_size = calculate_conv_output_size(
         input_size[1:3],
@@ -135,8 +150,16 @@ def create_vision_network(
     )
 
     # create the value and policy encoders.
-    v_enc = mlp(enc_input_size, arch.v_hidden_sizes) if arch.v_hidden_sizes is not None else nn.Identity()
-    p_enc = mlp(enc_input_size, arch.p_hidden_sizes) if arch.p_hidden_sizes is not None else nn.Identity()
+    v_enc = (
+        mlp(enc_input_size, arch.v_hidden_sizes, activation_layer=activation)
+        if arch.v_hidden_sizes is not None
+        else nn.Identity()
+    )
+    p_enc = (
+        mlp(enc_input_size, arch.p_hidden_sizes, activation_layer=activation)
+        if arch.p_hidden_sizes is not None
+        else nn.Identity()
+    )
 
     shared_enc = conv_encoder(
         input_channels=input_size[0],
@@ -144,6 +167,7 @@ def create_vision_network(
         layer_kernels_sizes=arch.shared_enc_kernel_sizes,
         layer_strides=arch.shared_enc_strides,
         flatten=True,
+        activation_layer=activation,
     )
     v_enc = nn.Sequential(shared_enc, v_enc)
     p_enc = nn.Sequential(shared_enc, p_enc)

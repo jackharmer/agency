@@ -3,6 +3,7 @@ import pickle
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from time import sleep
 from typing import Any, Tuple
 
 import pgzip
@@ -29,6 +30,10 @@ class BlockOfSteps(ABC):
     @abstractmethod
     def sample_batch_at_indices(self, roll_idx_2d: torch.Tensor, agent_idx: torch.Tensor):
         pass
+
+    @property
+    def is_circular(self):
+        return True
 
     @property
     def num_agents(self):
@@ -58,25 +63,38 @@ class BlockOfSteps(ABC):
 
 
 class BlockOfStepsMemory:
-    def __init__(self, block: BlockOfSteps, device: torch.device):
+    def __init__(self, block: BlockOfSteps, device: torch.device, debug: bool = False):
         self._device = device
         self._block = block
         self._max_size = block.num_elements
         self._num_agents = block.num_agents
+        self._debug = debug
 
         self._lock = threading.RLock()
-        self.clear()
+        self.reset()
 
     # @torch.jit.export
     def append(self, step: AgentStep, **kwargs):
-        with self._lock:
-            self._block.write_at_index(step, self._write_index)
-            self._completed_episodes_counter += int(step.done.sum())
-            self._agent_step_counter += self._num_agents
-            self._write_index += 1
-            self._have_valid_data_until_index += 1
-            self._write_index = self._write_index % self._max_size
-            self._have_valid_data_until_index = min(self._have_valid_data_until_index, self._max_size)
+        self._lock.acquire()
+
+        if self.is_full() and not self._block.is_circular:
+            if self._debug:
+                print("non circular buffer is full, can't write")
+            self._lock.release()
+            while self.is_full():
+                if self._debug:
+                    print("waiting for space ...")
+                sleep(1)
+            self._lock.acquire()
+
+        self._block.write_at_index(step, self._write_index)
+        self._completed_episodes_counter += int(step.done.sum())
+        self._agent_step_counter += self._num_agents
+        self._write_index += 1
+        self._have_valid_data_until_index += 1
+        self._write_index = self._write_index % self._max_size
+        self._have_valid_data_until_index = min(self._have_valid_data_until_index, self._max_size)
+        self._lock.release()
 
     def num_columns(self) -> int:
         with self._lock:
@@ -100,11 +118,17 @@ class BlockOfStepsMemory:
 
     def is_full(self) -> bool:
         with self._lock:
-            return self._have_valid_data_until_index == (self._max_size - 1)
+            return self._have_valid_data_until_index == self._max_size
+
+    def is_circular(self) -> bool:
+        return self._block.is_circular
 
     def clear(self):
         self._write_index = 0
         self._have_valid_data_until_index = 0
+
+    def reset(self):
+        self.clear()
         self._agent_step_counter = 0
         self._completed_episodes_counter = 0
 
@@ -139,6 +163,11 @@ class BlockOfStepsMemory:
 
             # Now sample the rollout data and return.
             return self._block.sample_batch_at_indices(roll_idx_2d, agent_idx)
+
+    @torch.jit.export
+    def sample_all(self, chunks: int = None):
+        with self._lock:
+            return self._block.sample_all(chunks=chunks)
 
     # TODO: Add unit test
     def save(self, fname, compressed=False):

@@ -18,17 +18,13 @@ class AwacTrainData:
     gamma_matrix: torch.Tensor
     beta: torch.Tensor
 
-    clip_norm: float
-    reward_scaling: float
-    reward_clip_value: float
-    adv_clip: float
-    use_softmax: bool
 
-
-def train_on_batch(net: Any, td: AwacTrainData, mb: SacBatch, fetch_log_data: bool) -> TrainLogInfo:
+def train_on_batch(hp: Any, net: Any, td: AwacTrainData, mb: SacBatch, fetch_log_data: bool) -> TrainLogInfo:
     scalar_logs, dist_logs, image_logs = {}, {}, {}
 
-    rewards = torch.clamp(mb.rewards * td.reward_scaling, -td.reward_clip_value, td.reward_clip_value)
+    rewards = torch.clamp(
+        mb.rewards * hp.rl.reward_scaling, -hp.rl.reward_clip_value, hp.rl.reward_clip_value
+    )
 
     # policy update
     td.policy_optimizer.zero_grad()
@@ -44,9 +40,9 @@ def train_on_batch(net: Any, td: AwacTrainData, mb: SacBatch, fetch_log_data: bo
             net.q1(mb.obs, mb.actions),
             net.q2(mb.obs, mb.actions),
         )
-        advantage = torch.clamp(Q_i - E_Q, -td.adv_clip, td.adv_clip)
+        advantage = torch.clamp(Q_i - E_Q, -hp.algo.adv_clip, hp.algo.adv_clip)
         scaled_advantage = advantage / td.beta
-        if td.use_softmax:
+        if hp.algo.use_softmax:
             # normalise over batch
             advantage_weighting = F.softmax(scaled_advantage, dim=0) * float(advantage.shape[0])
         else:
@@ -58,7 +54,7 @@ def train_on_batch(net: Any, td: AwacTrainData, mb: SacBatch, fetch_log_data: bo
 
     # policy backprop
     p_loss.backward()
-    p_grad_norm = torch.nn.utils.clip_grad_norm_(net.policy.parameters(), td.clip_norm)
+    p_grad_norm = torch.nn.utils.clip_grad_norm_(net.policy.parameters(), hp.backprop.clip_norm)
     td.policy_optimizer.step()
 
     # target value
@@ -77,7 +73,7 @@ def train_on_batch(net: Any, td: AwacTrainData, mb: SacBatch, fetch_log_data: bo
 
     # q1 backprop
     q1_loss.backward()
-    q1_grad_norm = torch.nn.utils.clip_grad_norm_(net.q1.parameters(), td.clip_norm)
+    q1_grad_norm = torch.nn.utils.clip_grad_norm_(net.q1.parameters(), hp.backprop.clip_norm)
     td.q1_optimizer.step()
 
     # q2 update
@@ -87,7 +83,7 @@ def train_on_batch(net: Any, td: AwacTrainData, mb: SacBatch, fetch_log_data: bo
 
     # q2 backprop
     q2_loss.backward()
-    q2_grad_norm = torch.nn.utils.clip_grad_norm_(net.q2.parameters(), td.clip_norm)
+    q2_grad_norm = torch.nn.utils.clip_grad_norm_(net.q2.parameters(), hp.backprop.clip_norm)
     td.q2_optimizer.step()
 
     net.update_target_weights()
@@ -130,10 +126,5 @@ def create_train_state_data(net, hp, wp):
         q2_optimizer=torch.optim.Adam(net.q2.parameters(), lr=hp.algo.learning_rate),
         gamma_matrix=make_gamma_matrix(hp.rl.gamma, hp.rl.roll_length).to(hp.device),
         beta=torch.tensor(hp.algo.beta, dtype=torch.float32),
-        clip_norm=hp.backprop.clip_norm,
-        reward_scaling=hp.rl.reward_scaling,
-        reward_clip_value=hp.rl.reward_clip_value,
-        adv_clip=hp.algo.adv_clip,
-        use_softmax=hp.algo.use_softmax,
     )
     return train_data

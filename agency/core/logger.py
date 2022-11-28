@@ -33,6 +33,8 @@ class LogParams:
     agent_steps_per_log: int = 10_000
     train_samples_per_log: int = 100_000
     log_on: LogOn = LogOn.TRAIN_SAMPLES
+    use_wandb: bool = False
+    wandb_project_name: str = None
 
 
 def extract_images_to_log(obs: torch.tensor, N: int = 3):

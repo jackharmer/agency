@@ -1,5 +1,6 @@
 import time
 from typing import Any
+from agency.worlds.brax_gym_env import BraxGymVecEnvThread
 
 from agency.worlds.gym_env import (
     GymThread,
@@ -112,7 +113,24 @@ def create_gym_simulator(
         thread_class=thread_class,
         make_env_fn=make_env_fn,
     )
+    return simulator
 
+
+def create_brax_gym_simulator(
+    inferer,
+    world_params,
+    memory,
+    episode_info_buffer,
+):
+    simulator = AsyncSimulator(
+        inferer=inferer,
+        num_worker_threads=1,  # We only need one worker here, since VECENV launches the seperate workers.
+        world_params=world_params,
+        memory=memory,
+        episode_info_buffer=episode_info_buffer,
+        thread_class=BraxGymVecEnvThread,
+        make_env_fn=None,
+    )
     return simulator
 
 

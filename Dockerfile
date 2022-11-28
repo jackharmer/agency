@@ -39,14 +39,11 @@ RUN python -m pip install -e .
 
 CMD ["bash"]
 
-# Build:
+# - Build:
 # docker build -t agency .
 #
-# Run the tests, using code from when the image was built:
-# docker run --gpus all -it agency python -m pytest tests
+# - Run the tests, using code from when the image was built:
+# docker run --gpus all -it agency python examples/gym/train_sac_mlp_continuous_lunarlander.py
 #
-# Run the tests, using code from the current working directory on the host:
-# docker run --gpus all -v $(pwd):/agency -it agency python -m pytest tests
-#
-# Launch a training run
+# - Run the tests, using code from the current working directory on the host:
 # docker run --gpus all -v $(pwd):/agency -it agency python examples/gym/train_sac_mlp_continuous_lunarlander.py

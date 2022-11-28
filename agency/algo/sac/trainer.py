@@ -20,18 +20,15 @@ class SacTrainData:
     gamma_matrix: torch.Tensor
     target_entropy: torch.Tensor
 
-    clip_norm: float
-    reward_scaling: float
-    reward_clip_value: float
-    train_alpha: bool
-
 
 @torch.jit.export
-def train_on_batch(net: Any, td: SacTrainData, mb: SacBatch, fetch_log_data: bool) -> TrainLogInfo:
+def train_on_batch(hp: Any, net: Any, td: SacTrainData, mb: SacBatch, fetch_log_data: bool) -> TrainLogInfo:
     debug_grads = False
     scalar_logs, dist_logs, image_logs = {}, {}, {}
 
-    rewards = torch.clamp(mb.rewards * td.reward_scaling, -td.reward_clip_value, td.reward_clip_value)
+    rewards = torch.clamp(
+        mb.rewards * hp.rl.reward_scaling, -hp.rl.reward_clip_value, hp.rl.reward_clip_value
+    )
     alpha = torch.exp(net.log_alpha).detach()
 
     # policy update
@@ -45,7 +42,7 @@ def train_on_batch(net: Any, td: SacTrainData, mb: SacBatch, fetch_log_data: boo
     p_loss.backward()
     if debug_grads:
         log_grads_and_vars("policy", net.policy.named_parameters(), scalar_logs, dist_logs)
-    p_grad_norm = clip_grad_norm_(net.policy_params, td.clip_norm)
+    p_grad_norm = clip_grad_norm_(net.policy_params, hp.backprop.clip_norm)
     td.policy_optimizer.step()
 
     # soft target
@@ -62,37 +59,37 @@ def train_on_batch(net: Any, td: SacTrainData, mb: SacBatch, fetch_log_data: boo
     # q1 update
     q1_pred = net.q1(mb.obs, mb.actions)
     error1 = q1_pred - soft_v_bootstrap
-    q1_loss = 0.5 * (error1 ** 2).mean()
+    q1_loss = 0.5 * (error1**2).mean()
 
     # q1 backprop
     td.q1_optimizer.zero_grad()
     q1_loss.backward()
     if debug_grads:
         log_grads_and_vars("q1", net.q1.named_parameters(), scalar_logs, dist_logs)
-    q1_grad_norm = clip_grad_norm_(net.q1.parameters(), td.clip_norm)
+    q1_grad_norm = clip_grad_norm_(net.q1.parameters(), hp.backprop.clip_norm)
     td.q1_optimizer.step()
 
     # q2 update
     q2_pred = net.q2(mb.obs, mb.actions)
     error2 = q2_pred - soft_v_bootstrap
-    q2_loss = 0.5 * (error2 ** 2).mean()
+    q2_loss = 0.5 * (error2**2).mean()
 
     # q2 backprop
     td.q2_optimizer.zero_grad()
     q2_loss.backward()
     if debug_grads:
         log_grads_and_vars("q2", net.q2.named_parameters(), scalar_logs, dist_logs)
-    q2_grad_norm = clip_grad_norm_(net.q2.parameters(), td.clip_norm)
+    q2_grad_norm = clip_grad_norm_(net.q2.parameters(), hp.backprop.clip_norm)
     td.q2_optimizer.step()
 
     # alpha
-    if td.train_alpha:
+    if hp.algo.train_alpha:
         policy = net.policy(mb.obs)
         target_entropy_error = (-policy.log_prob - td.target_entropy).detach()
         td.alpha_optimizer.zero_grad()
         alpha_loss = (net.log_alpha * target_entropy_error).mean()
         alpha_loss.backward()
-        alpha_grad_norm = clip_grad_norm_(net.alpha_parameters(), td.clip_norm)
+        alpha_grad_norm = clip_grad_norm_(net.alpha_parameters(), hp.backprop.clip_norm)
         td.alpha_optimizer.step()
     else:
         alpha_loss = torch.tensor(0.0)
@@ -104,11 +101,7 @@ def train_on_batch(net: Any, td: SacTrainData, mb: SacBatch, fetch_log_data: boo
     if fetch_log_data:
         # LOGGING INFO
         if len(mb.obs.shape) == 4:
-            I = (
-                mb.obs[0:3, 0:3, :, :]
-                if mb.obs.shape[1] == 3
-                else mb.obs[0:3, :, :, :].mean(1, keepdim=True)
-            )
+            I = mb.obs[0:3, 0:3, :, :] if mb.obs.shape[1] == 3 else mb.obs[0:3, :, :, :].mean(1, keepdim=True)
             image_logs["obs/image"] = tensor_to_numpy(I)
         scalar_logs["obs/obs_min"] = tensor_to_numpy(mb.obs.min())
         scalar_logs["obs/obs_max"] = tensor_to_numpy(mb.obs.max())
@@ -147,11 +140,13 @@ def train_on_batch(net: Any, td: SacTrainData, mb: SacBatch, fetch_log_data: boo
 
 @torch.jit.export
 def train_on_batch_categorical(
-    net: Any, td: SacTrainData, mb: SacBatchCategorical, fetch_log_data: bool
+    hp: Any, net: Any, td: SacTrainData, mb: SacBatchCategorical, fetch_log_data: bool
 ) -> TrainLogInfo:
     scalar_logs, dist_logs, image_logs = {}, {}, {}
 
-    rewards = torch.clamp(mb.rewards * td.reward_scaling, -td.reward_clip_value, td.reward_clip_value)
+    rewards = torch.clamp(
+        mb.rewards * hp.rl.reward_scaling, -hp.rl.reward_clip_value, hp.rl.reward_clip_value
+    )
 
     with torch.no_grad():
         alpha = torch.exp(net.log_alpha)
@@ -171,7 +166,7 @@ def train_on_batch_categorical(
     # policy backprop
     td.policy_optimizer.zero_grad()
     p_loss.backward()
-    p_grad_norm = clip_grad_norm_(net.policy_params, td.clip_norm, clip=clip)
+    p_grad_norm = clip_grad_norm_(net.policy_params, hp.backprop.clip_norm, clip=clip)
     td.policy_optimizer.step()
 
     # soft target
@@ -194,7 +189,7 @@ def train_on_batch_categorical(
     # q1 backprop
     td.q1_optimizer.zero_grad()
     q1_loss.backward()
-    q1_grad_norm = clip_grad_norm_(net.q1.parameters(), td.clip_norm, clip=clip)
+    q1_grad_norm = clip_grad_norm_(net.q1.parameters(), hp.backprop.clip_norm, clip=clip)
     td.q1_optimizer.step()
 
     # q2 update
@@ -205,10 +200,10 @@ def train_on_batch_categorical(
     # q2 backprop
     td.q2_optimizer.zero_grad()
     q2_loss.backward()
-    q2_grad_norm = clip_grad_norm_(net.q2.parameters(), td.clip_norm, clip=clip)
+    q2_grad_norm = clip_grad_norm_(net.q2.parameters(), hp.backprop.clip_norm, clip=clip)
     td.q2_optimizer.step()
 
-    if td.train_alpha:
+    if hp.algo.train_alpha:
         # alpha
         policy = net.policy(mb.obs)
         with torch.no_grad():
@@ -219,7 +214,7 @@ def train_on_batch_categorical(
 
         # alpha backprop
         alpha_loss.backward()
-        alpha_grad_norm = clip_grad_norm_(net.alpha_parameters(), td.clip_norm, clip=clip)
+        alpha_grad_norm = clip_grad_norm_(net.alpha_parameters(), hp.backprop.clip_norm, clip=clip)
         td.alpha_optimizer.step()
     else:
         alpha_loss = torch.FloatTensor(0.0)
@@ -299,9 +294,5 @@ def create_train_state_data(net, hp, wp):
             dtype=torch.float32,
             requires_grad=False,
         ),
-        clip_norm=hp.backprop.clip_norm,
-        reward_scaling=hp.rl.reward_scaling,
-        reward_clip_value=hp.rl.reward_clip_value,
-        train_alpha=hp.algo.train_alpha,
     )
     return train_data
